@@ -1,0 +1,45 @@
+﻿<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Certifica · Consulta de CNDs</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='9' fill='%23237561'/%3E%3Ctext x='10' y='29' font-family='Arial' font-size='30' fill='white'%3Ec%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script>
+</head>
+<body>
+<header><a class="brand" href="/"><span class="mark">c<span>✓</span></span>certifica<span class="brand-label">CONSULTA DE CNDs</span></a><span class="region"><span class="dot"></span> Minas Gerais</span></header>
+<main>
+<section class="hero"><div class="eyebrow">CONSULTA DIRETA AOS ÓRGÃOS</div><h1>Um CNPJ. <br>Suas certidões em um só lugar.</h1><p>Informe o CNPJ, escolha as certidões e acompanhe o retorno de cada órgão.</p></section>
+<div class="workspace">
+<section class="panel query-panel" aria-labelledby="query-title">
+<div class="panel-heading"><span class="step">01</span><div><h2 id="query-title">O que você quer consultar?</h2><p>Dados para esta consulta</p></div></div>
+<form id="query-form">
+<fieldset id="query-fields" disabled>
+<label class="field" for="cnpj">CNPJ</label><input id="cnpj" name="cnpj" required maxlength="18" placeholder="00.000.000/0000-00" autocomplete="off" autocapitalize="characters" spellcheck="false">
+<label class="field" for="city">Município</label><select id="city" name="city" required><option value="">Selecione o município</option></select>
+<div class="select-heading"><span>Certidões</span><button type="button" id="select-all" class="text-button">Selecionar todas</button></div>
+<div id="services"></div>
+<p class="mode-note">Federal: tentativa de consulta automática.<br>Demais órgãos: verificação de acesso e consulta manual no portal.</p>
+<div id="form-error" class="error" role="alert" hidden></div>
+<button id="submit" class="button primary" type="submit">Consultar selecionadas <span>→</span></button>
+</fieldset>
+</form>
+<div class="privacy"><span>◇</span> Consulta pontual, sem cadastrar empresa.</div>
+</section>
+<section class="results-column" aria-labelledby="results-title">
+<div class="results-heading"><div class="results-title"><span class="step">02</span><h2 id="results-title">Resultado das consultas</h2></div><span id="progress-label">Aguardando CNPJ</span></div>
+<div id="connection-error" class="error" role="alert" hidden></div>
+<div id="query-summary" class="query-summary" hidden></div>
+<div id="results">
+<div class="empty"><div class="empty-art"><svg viewBox="0 0 80 90" fill="none" aria-hidden="true"><rect x="13" y="5" width="50" height="68" rx="6" stroke="currentColor" stroke-width="2"/><path d="M24 22h28M24 32h28M24 42h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="56" cy="63" r="18" fill="#f6faf6" stroke="currentColor" stroke-width="2"/><path d="m48 63 5 5 10-11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3>Pronto para consultar</h3><p>Selecione as certidões ao lado.<br>O retorno de cada órgão aparecerá aqui.</p><div class="empty-tags"><span>Federal</span><span>FGTS</span><span>Estadual</span><span>Municipal</span><span>TJMG</span></div></div>
+</div>
+<p class="result-note">Falha de acesso, login pendente ou ausência de certidão não comprovam dívida.</p>
+<div id="run-announcement" class="sr-only" role="status" aria-live="polite"></div>
+</section>
+</div>
+<footer><span>Certifica · Consultas de CNDs</span><span>Santa Rita do Sapucaí · Pouso Alegre · Itajubá</span></footer>
+</main>
+<div id="toast" role="status" hidden></div>
+</body>
+</html>
+
