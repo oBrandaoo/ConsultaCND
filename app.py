@@ -19,12 +19,14 @@ class Server(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):
         pass
-    def send_data(self,status,body,kind='application/json; charset=utf-8'):
+    def send_data(self,status,body,kind='application/json; charset=utf-8',filename=None):
         if not isinstance(body,bytes):
             body=json.dumps(body,ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type',kind)
         self.send_header('Content-Length',str(len(body)))
+        if filename:
+            self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('X-Frame-Options','DENY')
@@ -40,6 +42,13 @@ class Handler(BaseHTTPRequestHandler):
         path=urlsplit(self.path).path
         if path=='/api/config':
             return self.send_data(200,{**self.server.consultations.config(),'token':self.server.token})
+        document=re.fullmatch(r'/api/consultations/([A-Za-z0-9_-]+)/documents/(municipal)',path)
+        if document:
+            try:
+                content,filename=self.server.consultations.get_document(document[1],document[2])
+                return self.send_data(200,content,'application/pdf',filename)
+            except ValidationError as error:
+                return self.send_data(404,{'error':str(error)})
         match=re.fullmatch(r'/api/consultations/([A-Za-z0-9_-]+)',path)
         if match:
             try:
