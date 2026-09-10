@@ -60,7 +60,7 @@ class ClassificationTest(unittest.TestCase):
 
     def test_municipal_routing(self):
         self.assertIn('santaritasapucai',portal_url('municipal',CITY))
-        self.assertIn('pousoalegre',portal_url('municipal','Pouso Alegre'))
+        self.assertIn('certidao-negativa-de-debitos',portal_url('municipal','Pouso Alegre'))
         self.assertIn('itajuba',portal_url('municipal','Itajubá'))
         self.assertIn('cdt.fazenda',portal_url('estadual',CITY))
 
@@ -87,7 +87,7 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(self.engine.get(run['id'])['results']['federal']['status'],'sem_certidao')
 
     def test_invalid_request_never_starts_browser(self):
-        for change in [{'services':[]},{'services':['unknown']},{'services':['federal','federal']},{'services':[{}]},{'city':[]},{'city':'Outro município'},{'cnpj':'000'}]:
+        for change in [{'services':[]},{'services':['unknown']},{'services':['federal','federal']},{'services':[{}]},{'city':[]},{'city':'Outro município'},{'cnpj':'000'},{'assisted':'true'},{'assisted':True,'services':['federal','fgts']}]:
             with self.assertRaises(ValidationError): self.engine.start({**DATA,**change})
         self.assertEqual(self.engine.runs,{})
 
@@ -137,6 +137,29 @@ class HttpTest(unittest.TestCase):
     def test_assets_and_unknown_query(self):
         for path in ['/','/app.js','/styles.css','/api/config']: self.assertEqual(self.request(path)[0],200)
         self.assertEqual(self.request('/api/consultations/does-not-exist')[0],404)
+
+    def test_pdf_download_matches_query_and_expires_with_it(self):
+        from test_santa_rita import pdf_bytes
+        content=pdf_bytes()
+        async def runner(rid):
+            self.engine.update(rid,'municipal',status='encontrada',_pdf=content)
+        self.engine.runner=runner
+        status,body=self.request('/api/consultations',{**DATA,'services':['municipal']})
+        self.assertEqual(status,202)
+        rid=json.loads(body)['id']
+        deadline=time.monotonic()+3
+        while self.engine.get(rid)['running'] and time.monotonic()<deadline:time.sleep(.01)
+        result=json.loads(self.request('/api/consultations/'+rid)[1])['results']['municipal']
+        self.assertNotIn('_pdf',result)
+        with urllib.request.urlopen(self.base+result['document_url']) as response:
+            self.assertEqual(response.headers['Content-Type'],'application/pdf')
+            self.assertIn('attachment;',response.headers['Content-Disposition'])
+            self.assertEqual(response.headers['Cache-Control'],'no-store')
+            self.assertEqual(response.read(),content)
+        self.assertEqual(self.request(f'/api/consultations/{rid}/documents/federal')[0],404)
+        self.assertEqual(self.request('/api/consultations/unknown/documents/municipal')[0],404)
+        self.engine.runs[rid]['created']-=1900
+        self.assertEqual(self.request(result['document_url'])[0],404)
 
 if __name__=='__main__': unittest.main()
 

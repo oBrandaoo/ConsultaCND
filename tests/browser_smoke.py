@@ -13,6 +13,11 @@ from playwright.sync_api import sync_playwright,expect
 def main():
     async def runner(rid):
         run=engine.get(rid)
+        if run.get('assisted'):
+            engine.update(rid,'federal',status='aguardando_usuario',message='Espera humana simulada para teste.')
+            await asyncio.sleep(2)
+            engine.update(rid,'federal',status='manual',message='Encerramento simulado da janela.',checked_at=timestamp())
+            return
         for service in run['results']:
             engine.update(rid,service,status='consultando',message='Consultando…')
             await asyncio.sleep(.2)
@@ -33,6 +38,10 @@ def main():
             page.goto(f'http://127.0.0.1:{server.server_address[1]}')
             expect(page.get_by_role('button',name='Consultar selecionadas')).to_be_enabled()
             expect(page.get_by_role('heading',name='Pronto para consultar')).to_be_visible()
+            expect(page.locator('input[name=service]:checked')).to_have_count(1)
+            expect(page.locator('input[value=municipal]')).to_be_checked()
+            expect(page.get_by_label('Município',exact=True)).to_have_value('Santa Rita do Sapucaí')
+            page.get_by_role('button',name='Selecionar todas').click()
             assert page.get_by_role('button',name='Nova empresa').count()==0
             assert page.locator('input[type=file]').count()==0
             page.screenshot(path=str(artifacts/'consulta-inicial.png'),full_page=True)
@@ -56,6 +65,12 @@ def main():
             page.get_by_role('button',name='Desmarcar todas').click()
             page.get_by_role('button',name='Consultar selecionadas').click()
             expect(page.locator('#form-error')).to_have_text('Selecione pelo menos uma certidão.')
+            page.get_by_role('button',name='Validar no Edge e consultar').click()
+            expect(page.locator('#run-announcement')).to_have_text('Aguardando sua validação na janela do Edge.')
+            expect(page.locator('#cnpj')).to_be_disabled()
+            expect(page.locator('#progress-label')).to_have_text('Verificação encerrada',timeout=10000)
+            expect(page.locator('.result-card')).to_have_count(1)
+            assert list(engine.runs.values())[-1]['assisted'] is True
             browser.close()
         assert not errors,errors
         print('OK: consulta, validação, seleção, resultados, escape HTML, recuperação após recarga e layout móvel. Retornos simulados.')
