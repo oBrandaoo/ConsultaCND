@@ -2,9 +2,27 @@
 
 Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe o PDF na própria página.
 
+## Prévia gratuita imediata no Windows
+
+O script abaixo publica a aplicação por uma URL HTTPS temporária do `localhost.run`, sem cadastro. Ele inicia o servidor e o túnel como processos ocultos e grava a URL atual em `.runtime/preview-url.txt`:
+
+```powershell
+.\scripts\start-free-preview.cmd
+```
+
+Para encerrar os dois processos:
+
+```powershell
+.\scripts\stop-free-preview.cmd
+```
+
+O computador precisa permanecer ligado e conectado. A URL gratuita muda quando o túnel é reiniciado, tem velocidade limitada e deve ser usada somente para demonstração. A prévia não possui login: qualquer pessoa com o endereço consegue iniciar consultas.
+
 ## Executar em um servidor com Docker
 
 Requisitos: Docker Engine com Compose e pelo menos 1 GB de memória compartilhada disponível para o navegador.
+
+No Windows, o Docker Desktop precisa de um backend de containers Linux ativo. Na configuração padrão, instale ou atualize o WSL 2 em um PowerShell executado como administrador e reinicie o Windows se solicitado antes de usar o Compose.
 
 ```bash
 cp .env.example .env
