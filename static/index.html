@@ -7,19 +7,18 @@
 <link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script>
 </head>
 <body>
-<header><a class="brand" href="/"><span class="mark">c<span>✓</span></span>certifica<span class="brand-label">CONSULTA DE CNDs</span></a><span class="region"><span class="dot"></span> Minas Gerais</span></header>
+<header><a class="brand" href="/"><span class="mark">c<span>✓</span></span>certifica<span class="brand-label">CONSULTA DE CNDs</span></a><span class="region"><span class="dot"></span> Brasil · Santa Rita</span></header>
 <main>
-<section class="hero"><div class="eyebrow">CND MUNICIPAL · SANTA RITA E POUSO ALEGRE</div><h1>Informe o CNPJ. <br>Consulte sua certidão.</h1><p>Consulta automática e gratuita da CND municipal de Santa Rita do Sapucaí e Pouso Alegre, com PDF e validade no resultado.</p></section>
+<section class="hero"><div class="eyebrow">FEDERAL · MUNICIPAL DE SANTA RITA</div><h1>Informe o CNPJ. <br>Baixe suas certidões.</h1><p>Emita ou baixe a segunda via da CND federal em todo o Brasil e mantenha a emissão automática da CND municipal de Santa Rita do Sapucaí.</p></section>
 <div class="workspace">
 <section class="panel query-panel" aria-labelledby="query-title">
-<div class="panel-heading"><span class="step">01</span><div><h2 id="query-title">O que você quer consultar?</h2><p>Dados para esta consulta</p></div></div>
+<div class="panel-heading"><span class="step">01</span><div><h2 id="query-title">Consultar certidões</h2><p>Federal e Santa Rita do Sapucaí</p></div></div>
 <form id="query-form">
 <fieldset id="query-fields" disabled>
 <label class="field" for="cnpj">CNPJ</label><input id="cnpj" name="cnpj" required maxlength="18" placeholder="00.000.000/0000-00" autocomplete="off" autocapitalize="characters" spellcheck="false">
-<label class="field" for="city">Município</label><select id="city" name="city" required><option value="">Selecione o município</option></select>
-<div class="select-heading"><span>Certidões</span><button type="button" id="select-all" class="text-button">Selecionar todas</button></div>
+<div class="select-heading"><span>Certidão</span></div>
 <div id="services"></div>
-<p class="mode-note">Consulta automática com PDF para Santa Rita e Pouso Alegre.<br>Em Pouso Alegre, uma janela temporária do Edge abre e fecha sozinha.</p>
+<p class="mode-note">As duas opções entregam o PDF automaticamente quando o órgão libera a certidão. Em produção, toda a navegação acontece no servidor.</p>
 <div id="form-error" class="error" role="alert" hidden></div>
 <button id="submit" class="button primary" type="submit">Consultar selecionadas <span>→</span></button>
 </fieldset>
@@ -31,13 +30,13 @@
 <div id="connection-error" class="error" role="alert" hidden></div>
 <div id="query-summary" class="query-summary" hidden></div>
 <div id="results">
-<div class="empty"><div class="empty-art"><svg viewBox="0 0 80 90" fill="none" aria-hidden="true"><rect x="13" y="5" width="50" height="68" rx="6" stroke="currentColor" stroke-width="2"/><path d="M24 22h28M24 32h28M24 42h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="56" cy="63" r="18" fill="#f6faf6" stroke="currentColor" stroke-width="2"/><path d="m48 63 5 5 10-11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3>Pronto para consultar</h3><p>Selecione as certidões ao lado.<br>O retorno de cada órgão aparecerá aqui.</p><div class="empty-tags"><span>Federal</span><span>FGTS</span><span>Estadual</span><span>Municipal</span><span>TJMG</span></div></div>
+<div class="empty"><div class="empty-art"><svg viewBox="0 0 80 90" fill="none" aria-hidden="true"><rect x="13" y="5" width="50" height="68" rx="6" stroke="currentColor" stroke-width="2"/><path d="M24 22h28M24 32h28M24 42h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="56" cy="63" r="18" fill="#f6faf6" stroke="currentColor" stroke-width="2"/><path d="m48 63 5 5 10-11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3>Pronto para consultar</h3><p>Informe um CNPJ válido e escolha as certidões.</p><div class="empty-tags"><span>CND federal</span><span>Santa Rita do Sapucaí</span></div></div>
 </div>
-<p class="result-note">Falha de acesso, login pendente ou ausência de certidão não comprovam dívida.</p>
+<p class="result-note">Falha de acesso, validação pendente ou ausência de certidão não comprovam dívida.</p>
 <div id="run-announcement" class="sr-only" role="status" aria-live="polite"></div>
 </section>
 </div>
-<footer><span>Certifica · Consultas de CNDs</span><span>Santa Rita do Sapucaí · Pouso Alegre · Itajubá</span></footer>
+<footer><span>Certifica · Consulta de CNDs</span><span>Receita Federal · Santa Rita do Sapucaí</span></footer>
 </main>
 <div id="toast" role="status" hidden></div>
 </body>
