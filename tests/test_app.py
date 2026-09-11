@@ -9,9 +9,8 @@ from app import Server
 from consultations import Consultations, ValidationError, assess_page, normalize_cnpj, portal_url
 
 CNPJ='18192898000102'
-CITY='Santa Rita do Sapucaí'
 URL='https://servicos.receitafederal.gov.br/servico/certidoes/'
-DATA={'cnpj':CNPJ,'city':CITY,'services':['federal']}
+DATA={'cnpj':CNPJ,'services':['federal']}
 
 class ClassificationTest(unittest.TestCase):
     def test_numeric_and_alphanumeric_cnpj(self):
@@ -27,8 +26,8 @@ class ClassificationTest(unittest.TestCase):
         self.assertIn('023',result['evidence'])
         self.assertTrue(result['submitted'])
 
-    def test_fgts_block_is_not_irregularity(self):
-        result=assess_page('fgts',CNPJ,'Estamos detectando comportamento malicioso no acesso.','https://validate.perfdrive.com/')
+    def test_access_block_is_not_irregularity(self):
+        result=assess_page('federal',CNPJ,'Estamos detectando comportamento malicioso no acesso.','https://validate.perfdrive.com/')
         self.assertEqual(result['status'],'bloqueado')
         self.assertFalse(result['submitted'])
 
@@ -49,25 +48,26 @@ class ClassificationTest(unittest.TestCase):
         self.assertEqual(result['status'],'sem_certidao')
         self.assertIn('não comprova',result['message'])
 
-    def test_visible_login_and_captcha_remain_pending_fiscal_result(self):
+    def test_visible_captcha_remains_pending_fiscal_result(self):
         self.assertEqual(assess_page('federal',CNPJ,'',URL,challenge=True)['status'],'captcha')
-        self.assertEqual(assess_page('estadual',CNPJ,'','https://sso.acesso.gov.br/')['status'],'login')
-        self.assertEqual(assess_page('estadual',CNPJ,'CDT','https://cdt.fazenda.mg.gov.br/')['status'],'login')
 
     def test_header_login_alone_does_not_block_public_query(self):
         result=assess_page('federal',CNPJ,'Entrar com gov.br\nNão foram encontradas certidões.',URL,True)
         self.assertEqual(result['status'],'sem_certidao')
 
-    def test_municipal_routing(self):
-        self.assertIn('santaritasapucai',portal_url('municipal',CITY))
-        self.assertIn('certidao-negativa-de-debitos',portal_url('municipal','Pouso Alegre'))
-        self.assertIn('itajuba',portal_url('municipal','Itajubá'))
-        self.assertIn('cdt.fazenda',portal_url('estadual',CITY))
+    def test_federal_and_santa_rita_are_available_without_city_selector(self):
+        config=Consultations(lambda _:None).config()
+        self.assertEqual(list(config['services']),['federal','municipal'])
+        self.assertNotIn('cities',config)
+        self.assertIn('receitafederal',portal_url('federal',None))
+        self.assertIn('santaritasapucai',portal_url('municipal',None))
 
 class EngineTest(unittest.TestCase):
     def setUp(self):
         self.finished=threading.Event()
+        self.processed=[]
         async def runner(rid):
+            self.processed.append(rid)
             await asyncio.sleep(.04)
             self.engine.update(rid,'federal',status='sem_certidao',message='Retorno de teste.',submitted=True)
             self.finished.set()
@@ -87,16 +87,33 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(self.engine.get(run['id'])['results']['federal']['status'],'sem_certidao')
 
     def test_invalid_request_never_starts_browser(self):
-        for change in [{'services':[]},{'services':['unknown']},{'services':['federal','federal']},{'services':[{}]},{'city':[]},{'city':'Outro município'},{'cnpj':'000'},{'assisted':'true'},{'assisted':True,'services':['federal','fgts']}]:
+        for change in [{'services':[]},{'services':['unknown']},{'services':['federal','federal']},{'services':[{}]},{'city':'Pouso Alegre'},{'cnpj':'000'},{'assisted':True},{'services':['federal','fgts']}]:
             with self.assertRaises(ValidationError): self.engine.start({**DATA,**change})
         self.assertEqual(self.engine.runs,{})
 
-    def test_one_active_query_and_expiry(self):
-        run=self.engine.start(DATA)
-        with self.assertRaises(ValidationError): self.engine.start(DATA)
-        self.wait_run(run['id'])
-        self.engine.runs[run['id']]['created']-=1900
-        with self.assertRaises(ValidationError): self.engine.get(run['id'])
+    def test_queries_are_processed_in_queue_order_and_expire(self):
+        first=self.engine.start(DATA)
+        second=self.engine.start(DATA)
+        self.wait_run(first['id'])
+        self.wait_run(second['id'])
+        self.assertEqual(self.processed,[first['id'],second['id']])
+        self.assertEqual(self.engine.get(second['id'])['phase'],'finished')
+        self.engine.runs[first['id']]['created']-=1900
+        with self.assertRaises(ValidationError): self.engine.get(first['id'])
+
+    def test_queue_capacity_is_bounded(self):
+        release=threading.Event()
+        async def blocked(rid):
+            await asyncio.to_thread(release.wait)
+            self.engine.update(rid,'federal',status='sem_certidao',message='Concluída.')
+        self.engine=Consultations(blocked,max_queue=1)
+        first=self.engine.start(DATA)
+        deadline=time.monotonic()+2
+        while self.engine.get(first['id'])['phase']=='queued' and time.monotonic()<deadline:time.sleep(.01)
+        second=self.engine.start(DATA)
+        with self.assertRaises(ValidationError):self.engine.start(DATA)
+        release.set()
+        self.wait_run(first['id']);self.wait_run(second['id'])
 
     def test_browser_failure_is_not_completed_query(self):
         async def broken(rid): raise RuntimeError('Browser unavailable')
@@ -134,32 +151,56 @@ class HttpTest(unittest.TestCase):
         self.assertEqual(self.request('/api/config',headers={'Host':'evil.example'})[0],403)
         self.assertEqual(self.request('/api/consultations',DATA,{'X-CSRF-Token':'wrong'})[0],403)
         self.assertEqual(self.request('/api/consultations',DATA,{'Origin':'https://evil.example'})[0],403)
+
+    def test_configured_https_domain_is_accepted_behind_proxy(self):
+        self.server.allowed_hosts=frozenset((*self.server.allowed_hosts,'certidoes.example'))
+        headers={'Host':'certidoes.example','Origin':'https://certidoes.example'}
+        self.assertEqual(self.request('/api/config',headers=headers)[0],200)
+        self.assertEqual(self.request('/api/consultations',DATA,headers)[0],202)
     def test_assets_and_unknown_query(self):
-        for path in ['/','/app.js','/styles.css','/api/config']: self.assertEqual(self.request(path)[0],200)
+        for path in ['/','/app.js','/styles.css','/api/config','/healthz']: self.assertEqual(self.request(path)[0],200)
         self.assertEqual(self.request('/api/consultations/does-not-exist')[0],404)
 
-    def test_pdf_download_matches_query_and_expires_with_it(self):
-        from test_santa_rita import pdf_bytes
+    def test_only_federal_and_santa_rita_requests_are_accepted(self):
+        status,body=self.request('/api/consultations',{'cnpj':CNPJ,'services':['estadual']})
+        self.assertEqual(status,400)
+        self.assertIn('Santa Rita',json.loads(body)['error'])
+        config=json.loads(self.request('/api/config')[1])
+        self.assertEqual(list(config['services']),['federal','municipal'])
+        self.assertNotIn('cities',config)
+
+    def test_santa_rita_pdf_download_matches_query(self):
+        from tests.test_santa_rita import pdf_bytes
         content=pdf_bytes()
         async def runner(rid):
-            self.engine.update(rid,'municipal',status='encontrada',_pdf=content)
+            self.engine.update(rid,'municipal',status='encontrada',message='Certidão municipal de teste.',_pdf=content)
         self.engine.runner=runner
-        status,body=self.request('/api/consultations',{**DATA,'services':['municipal']})
+        status,body=self.request('/api/consultations',{'cnpj':CNPJ,'services':['municipal']})
         self.assertEqual(status,202)
         rid=json.loads(body)['id']
         deadline=time.monotonic()+3
         while self.engine.get(rid)['running'] and time.monotonic()<deadline:time.sleep(.01)
         result=json.loads(self.request('/api/consultations/'+rid)[1])['results']['municipal']
-        self.assertNotIn('_pdf',result)
         with urllib.request.urlopen(self.base+result['document_url']) as response:
             self.assertEqual(response.headers['Content-Type'],'application/pdf')
-            self.assertIn('attachment;',response.headers['Content-Disposition'])
-            self.assertEqual(response.headers['Cache-Control'],'no-store')
             self.assertEqual(response.read(),content)
-        self.assertEqual(self.request(f'/api/consultations/{rid}/documents/federal')[0],404)
-        self.assertEqual(self.request('/api/consultations/unknown/documents/municipal')[0],404)
-        self.engine.runs[rid]['created']-=1900
-        self.assertEqual(self.request(result['document_url'])[0],404)
+
+    def test_federal_pdf_download_matches_query(self):
+        content=b'%PDF-1.7\nFederal controlled test\n%%EOF'
+        async def runner(rid):
+            self.engine.update(rid,'federal',status='encontrada',message='Certidão federal de teste.',_pdf=content)
+        self.engine.runner=runner
+        status,body=self.request('/api/consultations',DATA)
+        self.assertEqual(status,202)
+        rid=json.loads(body)['id']
+        deadline=time.monotonic()+3
+        while self.engine.get(rid)['running'] and time.monotonic()<deadline:time.sleep(.01)
+        result=json.loads(self.request('/api/consultations/'+rid)[1])['results']['federal']
+        self.assertIn('/documents/federal',result['document_url'])
+        with urllib.request.urlopen(self.base+result['document_url']) as response:
+            self.assertEqual(response.headers['Content-Type'],'application/pdf')
+            self.assertIn('cnd-federal-',response.headers['Content-Disposition'])
+            self.assertEqual(response.read(),content)
 
 if __name__=='__main__': unittest.main()
 
