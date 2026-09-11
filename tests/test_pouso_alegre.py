@@ -1,14 +1,17 @@
 """Respostas controladas; não consultam Pouso Alegre nem emitem certidão real."""
 import io
+import json
 import sys
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT),str(ROOT/'.tools')]
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 from playwright.async_api import async_playwright
-from pouso_alegre import HOST, URL, PortalError, consult_pouso_alegre, parse_pdf
+from pouso_alegre import HOST, URL, PortalError, consult_pouso_alegre, parse_pdf, wait_for_form
 
 CNPJ='23951916000122'
 CONTROL='TESTE00000-000-ABCDEFGHIJKLM-0'
@@ -49,34 +52,64 @@ class BrowserFlowTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.browser.close();await self.playwright.stop()
 
-    async def flow(self,content=None,captcha=False):
+    async def flow(self,content=None,captcha=False,main_block=False,emission_block=False,http_status=200,missing_button=False,
+                   delayed_form=False,transient_block=False,blocked_form=False):
         submissions=[];opened=[]
+        self.updates=[]
+        self.navigations=[]
         outer='<html><body><iframe src="https://'+HOST+'/autoatendimento/servicos/embed/data/test/servicos/certidao-negativa-de-debitos/detalhar/1"></iframe></body></html>'
-        if captcha:
-            inner='<html><body>Alerta A validação automática de segurança (captcha) identificou uma atividade incomum originada da sua rede. EST-000549</body></html>'
+        block='Alerta A validação automática de segurança (captcha) identificou uma atividade incomum originada da sua rede. Seu acesso foi restrito temporariamente. EST-000549'
+        if captcha or main_block:
+            inner='<html><body>'+block+'</body></html>'
+            if main_block:outer=inner
         else:
             inner='''<html><body><select name="opcaoEmissao" onchange="document.querySelector('#details').hidden=false">
             <option value="">Selecione a Forma de Emissão</option><option>Por CPF/CNPJ</option></select>
             <div id="details" hidden><input name="cpfCnpj"><select name="FinalidadeCertidaoDebito.codigo">
             <option value="">Selecione uma Finalidade...</option><option>Certidão por Contribuinte</option></select>
             <button onclick="fetch('atende.php',{method:'POST',body:'emitir=1'}).then(r=>r.arrayBuffer())">Confirmar</button></div></body></html>'''
+            if emission_block:
+                inner=inner.replace('.then(r=>r.arrayBuffer())', '.then(r=>r.text()).then(text=>document.body.innerText=text)')
+            if missing_button:
+                inner=inner.replace('>Confirmar</button>','>Outro botão</button>')
+            if delayed_form or transient_block:
+                form=inner
+                initial=block if transient_block else 'Carregando...'
+                inner='<html><body>'+initial+'<script>window.releaseForm=()=>document.body.innerHTML='+json.dumps(form)+'</script></body></html>'
+            if blocked_form:
+                inner=inner.replace('<body>','<body><div class="modal-mensagem-overlay">'+block+'</div>')
         async def route(request_route):
             request=request_route.request
             if request.url==URL:
-                await request_route.fulfill(status=200,content_type='text/html; charset=utf-8',body=outer)
+                self.navigations.append(request.url)
+                await request_route.fulfill(status=http_status,content_type='text/html; charset=utf-8',body=outer)
             elif '/embed/data/' in request.url and request.method=='GET':
                 await request_route.fulfill(status=200,content_type='text/html; charset=utf-8',body=inner)
             elif request.url.endswith('/atende.php') and request.method=='POST':
                 submissions.append(request.post_data)
-                await request_route.fulfill(status=200,content_type='application/pdf',body=content if content is not None else pdf_bytes())
+                await request_route.fulfill(status=200,content_type='text/plain; charset=utf-8' if emission_block else 'application/pdf',
+                                            body=block if emission_block else content if content is not None else pdf_bytes())
             else:await request_route.abort()
         browser=self.browser
         class Adapter:
             contexts=[]
             async def new_page(self,**kwargs):
                 page=await browser.new_page(**kwargs);opened.append(page)
+                if missing_button:
+                    original=page.set_default_timeout
+                    page.set_default_timeout=lambda timeout:original(200)
                 await page.context.route('**/*',route);return page
-        result=await consult_pouso_alegre(Adapter(),CNPJ)
+        async def short_wait(page,**kwargs):
+            # O prazo reduzido mede a transição controlada, não a inicialização do iframe no Edge.
+            await page.wait_for_load_state('load')
+            if delayed_form or transient_block:
+                frame=next(f for f in page.frames if '/embed/data/' in f.url)
+                await frame.evaluate('setTimeout(releaseForm, 1000)')
+            return await wait_for_form(page,timeout=2,**kwargs)
+        started=time.monotonic()
+        with patch('pouso_alegre.wait_for_form',side_effect=short_wait):
+            result=await consult_pouso_alegre(Adapter(),CNPJ,update=lambda **changes:self.updates.append(changes))
+        self.elapsed=time.monotonic()-started
         self.assertTrue(opened[0].is_closed())
         return result,submissions
 
@@ -92,9 +125,66 @@ class BrowserFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('_pdf',result)
         self.assertEqual(len(submissions),1)
 
-    async def test_captcha_is_reported_before_submission(self):
+    async def test_security_block_preserves_portal_evidence_before_submission(self):
         result,submissions=await self.flow(captcha=True)
-        self.assertEqual(result['status'],'captcha')
+        self.assertEqual(result['status'],'bloqueado')
+        self.assertIn('EST-000549',result['evidence'])
+        self.assertIn('atividade incomum',result['evidence'])
+        self.assertEqual(result['diagnostic'],'Etapa: formulario')
+        self.assertFalse(result['submitted'])
+        self.assertFalse(result['searched'])
+        self.assertEqual(submissions,[])
+        self.assertGreaterEqual(self.elapsed,2)
+        self.assertTrue(any('EST-000549' in change.get('evidence','') and change['status']=='consultando' for change in self.updates))
+        self.assertEqual(self.navigations,[URL])
+
+    async def test_delayed_form_continues_to_pdf(self):
+        result,submissions=await self.flow(delayed_form=True)
+        self.assertEqual(result['status'],'encontrada',result)
+        self.assertEqual(submissions,['emitir=1'])
+
+    async def test_transient_security_notice_waits_for_release_then_emits_once(self):
+        result,submissions=await self.flow(transient_block=True)
+        self.assertEqual(result['status'],'encontrada',result)
+        self.assertTrue(any('EST-000549' in change.get('evidence','') for change in self.updates))
+        self.assertTrue(any(change.get('evidence')=='' for change in self.updates))
+        self.assertNotIn('EST-000549',result['evidence'])
+        self.assertEqual(submissions,['emitir=1'])
+        self.assertEqual(self.navigations,[URL])
+
+    async def test_form_behind_security_notice_is_never_submitted(self):
+        result,submissions=await self.flow(blocked_form=True)
+        self.assertEqual(result['status'],'bloqueado',result)
+        self.assertEqual(submissions,[])
+
+    async def test_security_block_on_main_page(self):
+        result,submissions=await self.flow(main_block=True)
+        self.assertEqual(result['status'],'bloqueado')
+        self.assertIn('EST-000549',result['evidence'])
+        self.assertEqual(submissions,[])
+
+    async def test_security_block_after_submission_never_retries(self):
+        result,submissions=await self.flow(emission_block=True)
+        self.assertEqual(result['status'],'bloqueado')
+        self.assertIn('EST-000549',result['evidence'])
+        self.assertTrue(result['submitted'])
+        self.assertTrue(result['searched'])
+        self.assertEqual(submissions,['emitir=1'])
+        self.assertNotIn('_pdf',result)
+
+    async def test_http_access_block_is_not_generic_unavailability(self):
+        result,submissions=await self.flow(http_status=403)
+        self.assertEqual(result['status'],'bloqueado')
+        self.assertEqual(result['evidence'],'HTTP 403')
+        self.assertEqual(submissions,[])
+
+    async def test_failure_before_click_does_not_claim_submission(self):
+        result,submissions=await self.flow(missing_button=True)
+        self.assertEqual(result['status'],'indisponivel')
+        self.assertEqual(result['evidence'],'')
+        self.assertIn('TimeoutError',result['diagnostic'])
+        self.assertFalse(result['submitted'])
+        self.assertFalse(result['searched'])
         self.assertEqual(submissions,[])
 
 if __name__=='__main__':unittest.main()

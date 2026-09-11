@@ -21,6 +21,11 @@ def main():
         for service in run['results']:
             engine.update(rid,service,status='consultando',message='Consultando…')
             await asyncio.sleep(.2)
+            if service=='municipal' and run['city']=='Pouso Alegre':
+                engine.update(rid,service,status='bloqueado',message='Pouso Alegre recusou o acesso na validação automática de segurança.',
+                              evidence='Atividade incomum. EST-000549',diagnostic='Etapa: formulario · <script>teste</script>',
+                              submitted=False,searched=False,checked_at=timestamp())
+                continue
             engine.update(rid,service,status='indisponivel' if service=='federal' else 'login',
                 message='Retorno simulado para teste de interface.',
                 evidence='<script>alert(1)</script>' if service=='federal' else '',
@@ -71,6 +76,20 @@ def main():
             expect(page.locator('#progress-label')).to_have_text('Verificação encerrada',timeout=10000)
             expect(page.locator('.result-card')).to_have_count(1)
             assert list(engine.runs.values())[-1]['assisted'] is True
+            page.locator('input[value=federal]').uncheck()
+            page.locator('input[value=municipal]').check()
+            page.get_by_label('Município',exact=True).select_option(label='Pouso Alegre')
+            page.get_by_role('button',name='Consultar selecionadas').click()
+            expect(page.locator('#progress-label')).to_have_text('Verificação encerrada',timeout=10000)
+            expect(page.locator('.badge')).to_have_text('Acesso bloqueado')
+            expect(page.locator('.evidence')).to_have_text('Atividade incomum. EST-000549')
+            expect(page.locator('.result-diagnostic')).to_have_text('Etapa: formulario · <script>teste</script>')
+            assert page.locator('.result-diagnostic script').count()==0
+            expect(page.locator('.result-footer')).to_contain_text('Consulta de CNPJ não enviada')
+            assert page.get_by_role('link',name='Baixar certidão em PDF').count()==0
+            page.reload()
+            expect(page.locator('.evidence')).to_contain_text('EST-000549')
+            assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             browser.close()
         assert not errors,errors
         print('OK: consulta, validação, seleção, resultados, escape HTML, recuperação após recarga e layout móvel. Retornos simulados.')
