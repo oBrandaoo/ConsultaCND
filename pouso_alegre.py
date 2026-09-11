@@ -20,9 +20,10 @@ MAX_PDF=5*1024*1024
 
 
 class PortalError(Exception):
-    def __init__(self,message,status='manual'):
+    def __init__(self,message,status='manual',evidence=''):
         super().__init__(message)
         self.status=status
+        self.evidence=evidence[:1800]
 
 
 class PersistentBrowser:
@@ -157,20 +158,50 @@ def parse_pdf(content,cnpj):
             'valid_until':(issue_date+timedelta(days=validity_days)).isoformat(),'validity_days':validity_days}
 
 
-async def wait_for_form(page,timeout=45):
+def check_security_block(text):
+    normalized=fold(text)
+    if ('est-000549' in normalized or
+            ('atividade incomum' in normalized and 'restrit' in normalized)):
+        raise PortalError(
+            'Pouso Alegre recusou o acesso na validação automática de segurança. '
+            'A emissão não foi concluída. O portal orienta aguardar antes de tentar novamente. '
+            'Se o aviso persistir também ao abrir o portal diretamente, contate o atendimento da prefeitura.',
+            'bloqueado',text.strip())
+
+
+async def wait_for_form(page,timeout=60,update=None):
+    """Observa a mesma página; um aviso inicial não encerra a janela imediatamente."""
     deadline=time.monotonic()+timeout
+    last_block=None
+    last_notice=None
     while time.monotonic()<deadline:
+        if page.is_closed():raise PortalError('A janela de Pouso Alegre foi fechada antes de concluir a consulta.')
+        candidate=None
+        blocked=False
         for frame in page.frames:
-            if '/embed/data/' not in frame.url:continue
+            if frame!=page.main_frame and '/embed/data/' not in frame.url:continue
             try:
                 text=await frame.locator('body').inner_text(timeout=1000)
-                normalized=fold(text)
-                if 'atividade incomum' in normalized or 'est-000549' in normalized:
-                    raise PortalError('O portal de Pouso Alegre restringiu temporariamente esta rede pelo CAPTCHA automático. Tente novamente mais tarde.','captcha')
-                if await frame.locator('select[name=opcaoEmissao]').is_visible():return frame
-            except PortalError:raise
+                check_security_block(text)
+                field=frame.locator('select[name=opcaoEmissao]')
+                if (await field.is_visible() and await field.is_enabled() and
+                        not await frame.locator('.modal-mensagem-overlay:visible').count()):
+                    candidate=frame
+            except PortalError as error:
+                last_block=error
+                blocked=True
+                if update and error.evidence!=last_notice:
+                    update(status='consultando',
+                           message=f'O portal exibiu um aviso de segurança. A janela continuará aberta até o fim da espera de {timeout:g} segundos pelo formulário.',
+                           evidence=error.evidence)
+                    last_notice=error.evidence
             except Exception:pass
+        # Um formulário atrás de um aviso de bloqueio não significa acesso liberado.
+        if candidate and not blocked:
+            if update:update(status='consultando',message='Formulário liberado. Preenchendo os dados de Pouso Alegre…',evidence='')
+            return candidate
         await asyncio.sleep(.4)
+    if last_block:raise last_block
     raise PortalError('O formulário de Pouso Alegre não ficou disponível no prazo.','indisponivel')
 
 
@@ -178,15 +209,14 @@ async def wait_for_pdf(frame,future,timeout=50):
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:
         if future.done():return await future
+        if frame.page.is_closed():raise PortalError('A janela de Pouso Alegre foi fechada antes de concluir a emissão.')
         try:
             text=await frame.locator('body').inner_text(timeout=1000)
-            normalized=fold(text)
-            if 'atividade incomum' in normalized or 'est-000549' in normalized:
-                raise PortalError('O CAPTCHA automático de Pouso Alegre restringiu esta tentativa. Tente novamente mais tarde.','captcha')
+            check_security_block(text)
             modal=frame.locator('.modal-mensagem-overlay:visible')
             if await modal.count():
                 detail=(await modal.inner_text()).strip()
-                if detail:raise PortalError('Retorno de Pouso Alegre: '+re.sub(r'\s+',' ',detail)[:900])
+                if detail:raise PortalError('Pouso Alegre não concluiu a emissão. Confira o retorno do órgão abaixo.',evidence=detail)
         except PortalError:raise
         except Exception:pass
         await asyncio.sleep(.3)
@@ -210,13 +240,18 @@ async def consult_pouso_alegre(browser,cnpj,update=None):
         if update:update(status='consultando',message=message)
     try:
         response=await page.goto(URL,wait_until='domcontentloaded',timeout=40000)
-        if response and response.status>=400:raise PortalError(f'O portal respondeu HTTP {response.status}.','indisponivel')
+        if response and response.status>=400:
+            text=await page.locator('body').inner_text(timeout=1000)
+            check_security_block(text)
+            raise PortalError(f'O portal respondeu HTTP {response.status}.',
+                              'bloqueado' if response.status in (401,403,429) else 'indisponivel',
+                              f'HTTP {response.status}')
         reject=page.get_by_role('button',name='Rejeitar não necessários',exact=True)
         try:
             if await reject.is_visible(timeout=800):await reject.click()
         except Exception:pass
         progress('formulario','Aguardando a validação automática de Pouso Alegre…')
-        frame=await wait_for_form(page)
+        frame=await wait_for_form(page,update=update)
         await frame.locator('select[name=opcaoEmissao]').select_option(label='Por CPF/CNPJ')
         field=frame.locator('input[name=cpfCnpj]')
         await field.wait_for(state='visible')
@@ -255,7 +290,8 @@ async def consult_pouso_alegre(browser,cnpj,update=None):
     except Exception as error:
         status=error.status if isinstance(error,PortalError) else 'indisponivel'
         message=str(error) if isinstance(error,PortalError) else 'Não foi possível concluir esta etapa no portal de Pouso Alegre.'
-        return {'status':status,'message':message,'evidence':f'Etapa: {stage}','submitted':submitted,
-                'searched':stage=='emissao','stage':stage}
+        return {'status':status,'message':message,'evidence':getattr(error,'evidence',''),
+                'diagnostic':f'Etapa: {stage}'+('' if isinstance(error,PortalError) else f' · {type(error).__name__}'),
+                'submitted':submitted,'searched':submitted,'stage':stage}
     finally:
-        await page.close()
+        if not page.is_closed():await page.close()

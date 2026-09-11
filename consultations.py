@@ -24,7 +24,7 @@ SERVICES = {
     'federal': {'label':'Federal', 'issuer':'Receita Federal / PGFN', 'url':'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj', 'mode':'Experimental · pode exigir validação humana'},
     'fgts': {'label':'FGTS', 'issuer':'CAIXA', 'url':'https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf', 'mode':'Consulta automática não implementada'},
     'estadual': {'label':'Estadual MG', 'issuer':'SEF/MG', 'url':'https://cdt.fazenda.mg.gov.br/', 'mode':'Consulta automática não implementada · gov.br'},
-    'municipal': {'label':'Municipal', 'issuer':'Prefeitura', 'url':'', 'mode':'Automática com PDF em Santa Rita e Pouso Alegre'},
+    'municipal': {'label':'Municipal', 'issuer':'Prefeitura', 'url':'', 'mode':'Santa Rita: automática com PDF · Pouso Alegre: sujeita a bloqueio do portal'},
     'judicial': {'label':'Falência e concordata', 'issuer':'TJMG', 'url':'https://rupe.tjmg.jus.br/rupe/justica/publico/certidoes/criarSolicitacaoCertidao.rupe?solicitacaoPublica=true', 'mode':'Consulta automática não implementada'},
 }
 STATUS = {'aguardando':'Aguardando','consultando':'Consultando','encontrada':'Certidão localizada',
