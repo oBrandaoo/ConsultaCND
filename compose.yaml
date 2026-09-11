@@ -1,0 +1,20 @@
+services:
+  certifica:
+    build: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      PORT: 8000
+      CERTIFICA_BROWSER_MODE: server
+      CERTIFICA_HEADLESS: "false"
+      CERTIFICA_PROFILE_DIR: /data/browser-profile
+      CERTIFICA_MAX_QUEUE: "${CERTIFICA_MAX_QUEUE:-100}"
+      CERTIFICA_ALLOWED_HOSTS: "${CERTIFICA_ALLOWED_HOSTS:-localhost,127.0.0.1}"
+    shm_size: "1gb"
+    volumes:
+      - browser-profile:/data/browser-profile
+
+volumes:
+  browser-profile:

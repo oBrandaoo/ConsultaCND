@@ -1,0 +1,12 @@
+.git
+.gitignore
+.runtime
+.tools
+.venv
+__pycache__
+*.pyc
+tests
+data
+*.log
+*.png
+*.pdf

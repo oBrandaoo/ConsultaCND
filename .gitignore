@@ -4,3 +4,4 @@ data/
 .runtime/
 .tools/
 .venv/
+.env
