@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,15 +51,20 @@ class ConfigurationTest(unittest.IsolatedAsyncioTestCase):
             path,options=playwright.chromium.persistent
             self.assertEqual(Path(path),Path(directory))
             self.assertFalse(options['headless'])
+            if os.name == 'nt':
+                self.assertIn('--window-position=-32000,-32000',options['args'])
             self.assertIsNone(process);self.assertIsNone(profile)
             await close_browser(browser)
             self.assertTrue(playwright.chromium.context.closed)
 
-    async def test_server_municipal_uses_bundled_headless_chromium(self):
+    async def test_server_municipal_uses_bundled_full_chromium(self):
         playwright=FakePlaywright()
-        with patch.dict('os.environ',{'CERTIFICA_BROWSER_MODE':'server'},clear=False):
+        values={'CERTIFICA_BROWSER_MODE':'server','CERTIFICA_HEADLESS':'false'}
+        with patch.dict('os.environ',values,clear=False):
             await launch_municipal_browser(playwright)
-        self.assertEqual(playwright.chromium.launch_options,{'headless':True})
+        self.assertFalse(playwright.chromium.launch_options['headless'])
+        if os.name == 'nt':
+            self.assertIn('--window-position=-32000,-32000',playwright.chromium.launch_options['args'])
 
 
 if __name__=='__main__':unittest.main()
