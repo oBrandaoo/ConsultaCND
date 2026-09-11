@@ -1,6 +1,8 @@
 """Consultas pontuais: resultados temporários, sem carteira nem credenciais."""
 import asyncio
 import copy
+import os
+import queue
 import re
 import secrets
 import sys
@@ -15,20 +17,12 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent
 if (ROOT / '.tools').exists():
     sys.path.insert(0, str(ROOT / '.tools'))
-CITIES = {
-    'Santa Rita do Sapucaí': 'https://servicoswebsantaritasapucai.sgpcloud.net:8443/servicosweb/home.jsf',
-    'Pouso Alegre': 'https://pousoalegre.atende.net/autoatendimento/servicos/certidao-negativa-de-debitos/detalhar/1',
-    'Itajubá': 'https://sistemassonner.itajuba.mg.gov.br/portalcidadao/',
-}
 SERVICES = {
-    'federal': {'label':'Federal', 'issuer':'Receita Federal / PGFN', 'url':'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj', 'mode':'Experimental · pode exigir validação humana'},
-    'fgts': {'label':'FGTS', 'issuer':'CAIXA', 'url':'https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf', 'mode':'Consulta automática não implementada'},
-    'estadual': {'label':'Estadual MG', 'issuer':'SEF/MG', 'url':'https://cdt.fazenda.mg.gov.br/', 'mode':'Consulta automática não implementada · gov.br'},
-    'municipal': {'label':'Municipal', 'issuer':'Prefeitura', 'url':'', 'mode':'Santa Rita: automática com PDF · Pouso Alegre: sujeita a bloqueio do portal'},
-    'judicial': {'label':'Falência e concordata', 'issuer':'TJMG', 'url':'https://rupe.tjmg.jus.br/rupe/justica/publico/certidoes/criarSolicitacaoCertidao.rupe?solicitacaoPublica=true', 'mode':'Consulta automática não implementada'},
+    'federal': {'label':'CND federal', 'issuer':'Receita Federal / PGFN', 'url':'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj', 'mode':'Nacional · emissão ou segunda via automática com PDF'},
+    'municipal': {'label':'CND municipal', 'issuer':'Prefeitura de Santa Rita do Sapucaí', 'url':'https://servicoswebsantaritasapucai.sgpcloud.net:8443/servicosweb/home.jsf', 'mode':'Santa Rita do Sapucaí · automática com PDF'},
 }
 STATUS = {'aguardando':'Aguardando','consultando':'Consultando','encontrada':'Certidão localizada',
-    'sem_certidao':'Nenhuma certidão localizada','login':'Login necessário','captcha':'Validação humana',
+    'sem_certidao':'Nenhuma certidão localizada','login':'Login necessário','captcha':'Validação do portal recusada',
     'bloqueado':'Acesso bloqueado','indisponivel':'Não foi possível consultar','manual':'Concluir no portal',
     'aguardando_usuario':'Aguardando você no Edge'}
 PENDING = {'aguardando','consultando','aguardando_usuario'}
@@ -58,8 +52,8 @@ def formatted_cnpj(v):
 def fold(value):
     return ''.join(c for c in unicodedata.normalize('NFD',value.casefold()) if not unicodedata.combining(c))
 
-def portal_url(service,city):
-    return CITIES[city] if service=='municipal' else SERVICES[service]['url']
+def portal_url(service,city=None):
+    return SERVICES[service]['url']
 
 def assess_page(service,cnpj,text,url,submitted=False,rows=None,challenge=False,login=False):
     """Formulário, falha e bloqueio nunca são convertidos em regularidade fiscal."""
@@ -103,59 +97,70 @@ async def inspect_result(page,service,cnpj,submitted):
     return assess_page(service,cnpj,text,page.url,submitted,rows,challenge,login)
 
 async def run_portal(browser,service,cnpj,city,assisted=False,update=None):
-    if service=='municipal' and city=='Santa Rita do Sapucaí':
+    if service=='municipal':
         from santa_rita import consult_santa_rita
         return await consult_santa_rita(browser,cnpj,update)
-    if service=='municipal' and city=='Pouso Alegre':
-        from pouso_alegre import consult_pouso_alegre
-        return await consult_pouso_alegre(browser,cnpj,update)
     if service=='federal':
         from federal import consult_federal
         return await consult_federal(browser,cnpj,assisted,update)
-    page=await browser.new_page(locale='pt-BR')
-    page.set_default_timeout(12000)
-    submitted=False
-    try:
-        response=await page.goto(portal_url(service,city),wait_until='domcontentloaded',timeout=25000)
-        if response and response.status>=400:
-            return {'status':'bloqueado' if response.status in (401,403,429) else 'indisponivel','message':f'O portal respondeu HTTP {response.status}. A consulta fiscal não foi concluída.','evidence':'','submitted':False}
-        await page.wait_for_timeout(2000)
-        return await inspect_result(page,service,cnpj,submitted)
-    except Exception as error:
-        label='O portal demorou a responder.' if 'Timeout' in type(error).__name__ else 'Não foi possível acessar o portal neste ambiente.'
-        return {'status':'indisponivel','message':label+' Nenhum resultado fiscal foi confirmado.','evidence':'','submitted':submitted}
-    finally:
-        await page.close()
+    raise ValidationError('Esta versão consulta somente a CND federal ou a municipal de Santa Rita.')
 
 class Consultations:
-    def __init__(self,runner=None):
+    def __init__(self,runner=None,max_queue=None):
         self.lock=threading.RLock()
         self.runs={}
         self.runner=runner or self._run
+        try:
+            self.max_queue=int(max_queue if max_queue is not None else os.environ.get('CERTIFICA_MAX_QUEUE','100'))
+        except (TypeError,ValueError):
+            raise ValueError('CERTIFICA_MAX_QUEUE deve ser um número inteiro.')
+        if not 1<=self.max_queue<=500:
+            raise ValueError('CERTIFICA_MAX_QUEUE deve ficar entre 1 e 500.')
+        self.jobs=queue.Queue(maxsize=self.max_queue)
+        self.worker=threading.Thread(target=self._worker_loop,daemon=True,name='certifica-worker')
+        self.worker.start()
 
     def config(self):
-        return {'cities':list(CITIES),'services':SERVICES,'statuses':STATUS,
-                'default_city':'Santa Rita do Sapucaí','default_services':['municipal']}
+        return {'services':SERVICES,'statuses':STATUS,'default_services':['federal']}
 
     def start(self,data):
+        if set(data) - {'cnpj','services'}:
+            raise ValidationError('Envie somente o CNPJ para a consulta federal.')
         cnpj=normalize_cnpj(data.get('cnpj'))
-        city,services=data.get('city'),data.get('services')
-        assisted=data.get('assisted',False)
-        if not isinstance(assisted,bool) or (assisted and services!=['federal']):
-            raise ValidationError('A validação humana está disponível apenas para uma consulta federal por vez.')
-        if not isinstance(city,str) or city not in CITIES:
-            raise ValidationError('Selecione o município da consulta.')
-        if not isinstance(services,list) or not services or len(services)>5 or any(not isinstance(s,str) or s not in SERVICES for s in services) or len(set(services))!=len(services):
-            raise ValidationError('Selecione pelo menos uma das cinco certidões, sem repetições.')
+        services=data.get('services')
+        if (not isinstance(services,list) or not services or len(services)>2 or
+                any(not isinstance(service,str) or service not in SERVICES for service in services) or
+                len(set(services))!=len(services)):
+            raise ValidationError('Selecione a CND federal, a municipal de Santa Rita ou ambas, sem repetições.')
+        assisted='federal' in services
+        scope=('Brasil + Santa Rita do Sapucaí · MG' if len(services)==2 else
+               'Brasil' if services==['federal'] else 'Santa Rita do Sapucaí · MG')
         with self.lock:
             self._expire()
-            if any(r['running'] for r in self.runs.values()):
-                raise ValidationError('Aguarde a consulta em andamento antes de iniciar outra.')
             rid=secrets.token_urlsafe(18)
-            self.runs[rid]={'id':rid,'cnpj':cnpj,'city':city,'assisted':assisted,'started_at':timestamp(),'created':time.monotonic(),'running':True,
-                'results':{s:{'service':s,'status':'aguardando','message':'Aguardando acesso ao órgão.','evidence':'','submitted':False,'url':portal_url(s,city),'checked_at':None} for s in services}}
-            threading.Thread(target=self._execute,args=(rid,),daemon=True).start()
+            self.runs[rid]={'id':rid,'cnpj':cnpj,'scope':scope,'assisted':assisted,'started_at':timestamp(),
+                'processing_started_at':None,'finished_at':None,'phase':'queued','created':time.monotonic(),'running':True,
+                'results':{s:{'service':s,'status':'aguardando','message':'Consulta adicionada à fila do servidor.','evidence':'','submitted':False,'url':portal_url(s,None),'checked_at':None} for s in services}}
+            try:
+                self.jobs.put_nowait(rid)
+            except queue.Full:
+                del self.runs[rid]
+                raise ValidationError('A fila está cheia. Aguarde algumas consultas terminarem e tente novamente.')
             return self.get(rid)
+
+    def _worker_loop(self):
+        while True:
+            rid=self.jobs.get()
+            try:
+                with self.lock:
+                    run=self.runs.get(rid)
+                    if not run:
+                        continue
+                    run['phase']='running'
+                    run['processing_started_at']=timestamp()
+                self._execute(rid)
+            finally:
+                self.jobs.task_done()
 
     def _expire(self):
         for rid in list(self.runs):
@@ -178,18 +183,19 @@ class Consultations:
                     result['document_url']=f'/api/consultations/{rid}/documents/{service}'
             return run
 
+    def update(self,rid,service,**changes):
+        with self.lock:
+            self.runs[rid]['results'][service].update(changes)
+
     def get_document(self,rid,service):
         with self.lock:
             self._expire()
             run=self.runs.get(rid)
             result=run['results'].get(service) if run else None
-            if not result or result['status']!='encontrada' or not result.get('_pdf'):
+            if service not in SERVICES or not result or result['status']!='encontrada' or not result.get('_pdf'):
                 raise ValidationError('PDF não encontrado ou expirado. Inicie uma nova consulta.')
-            return result['_pdf'],f'cnd-{service}-{run["cnpj"]}.pdf'
-
-    def update(self,rid,service,**changes):
-        with self.lock:
-            self.runs[rid]['results'][service].update(changes)
+            scope='federal' if service=='federal' else 'santa-rita'
+            return result['_pdf'],f'cnd-{scope}-{run["cnpj"]}.pdf'
 
     def _execute(self,rid):
         try:
@@ -206,30 +212,34 @@ class Consultations:
         finally:
             with self.lock:
                 self.runs[rid]['running']=False
+                self.runs[rid]['phase']='finished'
+                self.runs[rid]['finished_at']=timestamp()
 
     async def _run(self,rid):
         from playwright.async_api import async_playwright
         run=self.get(rid)
         async with async_playwright() as p:
-            pouso=('municipal' in run['results'] and run['city']=='Pouso Alegre')
-            pouso_browser=pouso_process=pouso_profile=browser=None
-            try:
-                if pouso:
-                    from pouso_alegre import launch_pouso_browser
-                    pouso_browser,pouso_process,pouso_profile=await launch_pouso_browser(p)
-                regular=any(not (service=='municipal' and pouso) for service in run['results'])
-                browser=await p.chromium.launch(channel='msedge',headless=not run['assisted']) if regular else None
-                semaphore=asyncio.Semaphore(2)
-                async def consult(service):
-                    async with semaphore:
-                        self.update(rid,service,status='consultando',message='Acessando o portal oficial…')
-                        selected_browser=pouso_browser if service=='municipal' and pouso else browser
-                        result=await run_portal(selected_browser,service,run['cnpj'],run['city'],run['assisted'],
-                                                lambda **changes:self.update(rid,service,**changes))
-                        self.update(rid,service,**result,checked_at=timestamp())
-                await asyncio.gather(*(consult(s) for s in run['results']))
-            finally:
-                if browser:await browser.close()
-                if pouso_browser:
-                    from pouso_alegre import close_pouso_browser
-                    await close_pouso_browser(pouso_browser,pouso_process,pouso_profile)
+            async def consult(service):
+                browser=process=profile=None
+                try:
+                    if service=='federal':
+                        from browser_worker import launch_federal_browser
+                        browser,process,profile=await launch_federal_browser(p)
+                        message='Acessando o portal oficial da Receita no navegador do servidor…'
+                    else:
+                        from browser_worker import launch_municipal_browser
+                        browser=await launch_municipal_browser(p)
+                        message='Acessando o portal de Santa Rita do Sapucaí…'
+                    self.update(rid,service,status='consultando',message=message)
+                    result=await run_portal(browser,service,run['cnpj'],None,service=='federal',
+                                            lambda **changes:self.update(rid,service,**changes))
+                    self.update(rid,service,**result,checked_at=timestamp())
+                except Exception as error:
+                    self.update(rid,service,status=getattr(error,'status','indisponivel'),
+                                message=f'Não foi possível iniciar esta consulta ({type(error).__name__}).',
+                                evidence='',submitted=False,checked_at=timestamp())
+                finally:
+                    if browser:
+                        from browser_worker import close_browser
+                        await close_browser(browser,process,profile)
+            await asyncio.gather(*(consult(service) for service in run['results']))

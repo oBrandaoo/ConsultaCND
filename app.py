@@ -1,6 +1,7 @@
 ﻿"""Certifica: interface local dedicada a consultas pontuais de CNDs."""
 import argparse
 import json
+import os
 import re
 import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,9 +12,16 @@ ROOT=Path(__file__).resolve().parent
 
 class Server(ThreadingHTTPServer):
     daemon_threads=True
-    def __init__(self,address,consultations=None):
+    def __init__(self,address,consultations=None,allowed_hosts=None):
         self.consultations=consultations or Consultations()
         self.token=secrets.token_urlsafe(32)
+        configured=allowed_hosts if allowed_hosts is not None else os.environ.get('CERTIFICA_ALLOWED_HOSTS','')
+        if isinstance(configured,str):
+            configured=configured.split(',')
+        hosts={host.strip().lower() for host in configured if host.strip()}
+        if any('/' in host or ':' in host for host in hosts):
+            raise ValueError('CERTIFICA_ALLOWED_HOSTS deve conter apenas nomes separados por vírgula, sem porta ou protocolo.')
+        self.allowed_hosts=frozenset(hosts|{'localhost','127.0.0.1'})
         super().__init__(address,Handler)
 
 class Handler(BaseHTTPRequestHandler):
@@ -35,14 +43,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
     def valid_host(self):
-        return self.headers.get('Host') in (f'127.0.0.1:{self.server.server_address[1]}',f'localhost:{self.server.server_address[1]}')
+        try:
+            hostname=urlsplit('//'+self.headers.get('Host','')).hostname
+        except ValueError:
+            return False
+        return bool(hostname and hostname.lower() in self.server.allowed_hosts)
+    def valid_origin(self):
+        origin=self.headers.get('Origin')
+        if not origin:
+            return True
+        parsed=urlsplit(origin)
+        return parsed.scheme in ('http','https') and parsed.netloc.lower()==self.headers.get('Host','').lower()
     def do_GET(self):
         if not self.valid_host():
-            return self.send_data(403,{'error':'Use o endereço local do aplicativo.'})
+            return self.send_data(403,{'error':'Host não permitido.'})
         path=urlsplit(self.path).path
+        if path=='/healthz':
+            return self.send_data(200,{'status':'ok'})
         if path=='/api/config':
             return self.send_data(200,{**self.server.consultations.config(),'token':self.server.token})
-        document=re.fullmatch(r'/api/consultations/([A-Za-z0-9_-]+)/documents/(municipal)',path)
+        document=re.fullmatch(r'/api/consultations/([A-Za-z0-9_-]+)/documents/(federal|municipal)',path)
         if document:
             try:
                 content,filename=self.server.consultations.get_document(document[1],document[2])
@@ -63,8 +83,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.valid_host() or self.headers.get('X-CSRF-Token')!=self.server.token:
             return self.send_data(403,{'error':'Recarregue a página antes de consultar.'})
-        origin=self.headers.get('Origin')
-        if origin and origin!=f'http://{self.headers.get("Host")}':
+        if not self.valid_origin():
             return self.send_data(403,{'error':'Origem não permitida.'})
         if urlsplit(self.path).path!='/api/consultations':
             return self.send_data(404,{'error':'Operação não encontrada.'})
@@ -84,11 +103,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_data(500,{'error':'Não foi possível iniciar a consulta.'})
 
 def main():
-    parser=argparse.ArgumentParser(description='Consulta local de CNDs')
-    parser.add_argument('--port',type=int,default=8000)
+    parser=argparse.ArgumentParser(description='Consulta web de CNDs')
+    parser.add_argument('--host',default=os.environ.get('HOST','127.0.0.1'))
+    parser.add_argument('--port',type=int,default=int(os.environ.get('PORT','8000')))
     args=parser.parse_args()
-    server=Server(('127.0.0.1',args.port))
-    print(f'Consulta de CNDs disponível em http://127.0.0.1:{args.port}',flush=True)
+    server=Server((args.host,args.port))
+    print(f'Consulta de CNDs disponível em http://{args.host}:{args.port}',flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

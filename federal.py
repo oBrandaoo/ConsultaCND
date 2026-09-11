@@ -1,196 +1,296 @@
-"""Fluxo público da Receita, incluindo validação e pesquisa por período.
-
-Observa somente respostas às requisições feitas pelo próprio formulário.
-Não reutiliza tokens, não chama APIs à parte e não resolve CAPTCHA.
-"""
+"""Emissão ou segunda via da CND federal pelo fluxo público oficial."""
 import asyncio
+import base64
+import binascii
+import io
 import re
 import time
+import unicodedata
 from datetime import datetime
 from urllib.parse import urlsplit
 
-HOST = 'servicos.receitafederal.gov.br'
-API = '/servico/certidoes/api/consulta'
-URL = f'https://{HOST}/servico/certidoes/#/home/cnpj'
+HOST='servicos.receitafederal.gov.br'
+ROOT_API='/servico/certidoes/api'
+API=ROOT_API+'/consulta'
+EMISSION=ROOT_API+'/Emissao'
+URL=f'https://{HOST}/servico/certidoes/#/home/cnpj'
+MAX_PDF=4*1024*1024
 
 
-def outcome(status, message, evidence='', **extra):
-    return {'status': status, 'message': message, 'evidence': evidence[:4000], **extra}
+class FederalError(Exception):
+    def __init__(self,message,status='manual',evidence=''):
+        super().__init__(message)
+        self.status=status
+        self.evidence=evidence[:1800]
 
 
-def parse_response(status, body, stage):
-    """Interpreta o contrato usado pelo frontend oficial, sem deduzir regularidade."""
-    if not isinstance(body, dict):
-        return outcome('manual', 'A Receita devolveu uma resposta não reconhecida.')
-    validation = body.get('statusValidacao')
-    code = body.get('codigo')
-    evidence = f'HTTP {status}' + (f' · Código {str(code)[:40]}' if code else '')
-    if validation in ('CaptchaFalhaValidacao', 'CaptchaTokenNaoInformado'):
-        return outcome('captcha', 'A Receita não aceitou a validação CAPTCHA. Use a consulta com validação humana no Edge.',
-                       evidence + f' · {validation}')
-    if status >= 400:
-        return outcome('indisponivel', 'A Receita interrompeu a consulta. Nenhuma certidão foi confirmada.',
-                       evidence + (f' · {str(validation)[:120]}' if validation else ''))
-    if stage != 'pesquisa':
-        if body.get('status') in ('SistemaIndisponivel', 'BaseIndisponivel'):
-            return outcome('indisponivel', 'A Receita não concluiu a validação do contribuinte.')
-        return None  # Validar o CNPJ não é pesquisar certidões.
-    state = body.get('statusConsulta')
-    if state == 'CertidaoNaoEncontrada':
-        return outcome('sem_certidao', 'A Receita não localizou certidões no período pesquisado. Isso não comprova dívida ou irregularidade.')
-    if state not in ('Sucesso', 'SucessoMais300'):
+def outcome(status,message,evidence='',**extra):
+    return {'status':status,'message':message,'evidence':evidence[:4000],**extra}
+
+
+def fold(value):
+    return ''.join(character for character in unicodedata.normalize('NFD',value.casefold())
+                   if not unicodedata.combining(character))
+
+
+def message_text(body):
+    message=body.get('mensagem') if isinstance(body,dict) else None
+    if isinstance(message,dict):message=message.get('texto')
+    return re.sub(r'\s+',' ',message).strip()[:800] if isinstance(message,str) else ''
+
+
+def validation_failure(item):
+    body=item.get('body')
+    if not isinstance(body,dict):
+        return FederalError('A Receita devolveu uma resposta não reconhecida.','indisponivel')
+    validation=body.get('statusValidacao')
+    code=body.get('codigo')
+    evidence=f"HTTP {item['status']}"+(f' · Código {str(code)[:40]}' if code else '')
+    if validation in ('CaptchaFalhaValidacao','CaptchaTokenNaoInformado'):
+        return FederalError('A validação automática invisível da Receita não foi aceita. Tente novamente em uma nova consulta.',
+                            'captcha',evidence+f' · {validation}')
+    if item['status']>=400:
+        return FederalError('A Receita interrompeu a consulta. Nenhuma certidão foi confirmada.',
+                            'indisponivel',evidence+(f' · {str(validation)[:100]}' if validation else ''))
+    return None
+
+
+def parse_response(status,body,stage):
+    """Interpreta respostas de consulta sem deduzir regularidade de uma falha."""
+    item={'status':status,'body':body}
+    failure=validation_failure(item)
+    if failure:return outcome(failure.status,str(failure),failure.evidence)
+    if stage!='pesquisa':return None
+    state=body.get('statusConsulta')
+    if state=='CertidaoNaoEncontrada':
+        return outcome('sem_certidao','A Receita não localizou certidões no período pesquisado. Isso não comprova dívida ou irregularidade.')
+    if state not in ('Sucesso','SucessoMais300'):
         return outcome('indisponivel' if state in ('SistemaIndisponivel','BaseIndisponivel') else 'manual',
-                       'A Receita não retornou uma lista de certidões confirmada.', f'Retorno: {str(state)[:120]}')
-    certs = body.get('certidoes')
-    if not isinstance(certs, list) or not certs:
-        return outcome('manual', 'A resposta da Receita não contém certidões que a ferramenta consiga identificar.')
-    lines = []
+                       'A Receita não retornou uma lista de certidões confirmada.',f'Retorno: {str(state)[:120]}')
+    certs=body.get('certidoes')
+    if not isinstance(certs,list) or not certs:
+        return outcome('manual','A resposta da Receita não contém certidões identificáveis.')
+    lines=[]
     for cert in certs[:300]:
-        if not isinstance(cert, dict): continue
-        control, kind, issued = (cert.get(k) for k in ('numeroControle','tipoCertidao','dataEmissao'))
-        if not all(isinstance(v,str) and v.strip() for v in (control,kind,issued)): continue
-        try: datetime.fromisoformat(issued.replace('Z','+00:00'))
-        except ValueError: continue
-        parts = []
+        if not isinstance(cert,dict):continue
+        control,kind,issued=(cert.get(key) for key in ('numeroControle','tipoCertidao','dataEmissao'))
+        if not all(isinstance(value,str) and value.strip() for value in (control,kind,issued)):continue
+        try:datetime.fromisoformat(issued.replace('Z','+00:00'))
+        except ValueError:continue
+        parts=[]
         for key,label in [('numeroControle','Controle'),('tipoCertidao','Tipo'),('dataEmissao','Emissão'),('dataValidade','Validade'),('situacao','Situação')]:
-            value = cert.get(key)
-            if isinstance(value,str) and value: parts.append(f'{label}: {value[:160]}')
+            value=cert.get(key)
+            if isinstance(value,str) and value:parts.append(f'{label}: {value[:160]}')
         lines.append('\n'.join(parts))
-    if not lines:
-        return outcome('manual', 'Os registros retornados pela Receita não puderam ser identificados com segurança.')
-    return outcome('encontrada', 'A Receita retornou certidões para este CNPJ. Confira tipo, validade e situação; podem existir documentos vencidos ou anulados.',
-                   '\n\n'.join(lines[:5]), certificate_count=len(lines))
+    if not lines:return outcome('manual','Os registros retornados pela Receita não puderam ser identificados com segurança.')
+    return outcome('encontrada','A Receita retornou certidões para este CNPJ.','\n\n'.join(lines[:5]),certificate_count=len(lines))
 
 
-class FederalTrace:
-    """Guarda apenas resultado e diagnóstico; nunca cabeçalhos, cookies ou tokens."""
-    def __init__(self, cnpj):
-        self.cnpj = cnpj
-        self.stage = 'acesso'
-        self.submitted = False
-        self.searched = False
-        self.result = None
-        self.period = ''
-        self.current_request = None
-        self.tasks = set()
+def decode_pdf(body):
+    encoded=body.get('pdf') if isinstance(body,dict) else None
+    if not isinstance(encoded,str) or not encoded:
+        raise FederalError('A Receita não devolveu o arquivo da certidão.')
+    try:content=base64.b64decode(encoded,validate=True)
+    except (ValueError,binascii.Error):raise FederalError('O arquivo devolvido pela Receita não está em um formato reconhecido.')
+    if not content.startswith(b'%PDF-') or not 500<len(content)<=MAX_PDF:
+        raise FederalError('A Receita não devolveu um PDF válido dentro do limite de tamanho.')
+    return content
 
-    def request(self, request):
-        url = urlsplit(request.url)
-        if url.scheme != 'https' or url.hostname != HOST or request.method != 'POST': return
-        if url.path not in (API, API+'/validar-contribuinte'): return
-        try: data = request.post_data_json
-        except Exception: return
-        self.current_request = request
-        self.result = None
-        self.stage = 'pesquisa' if url.path == API else 'validacao'
-        if not isinstance(data,dict) or data.get('ni') != self.cnpj or data.get('tipoContribuinte') != 'PJ':
-            self.result = outcome('manual', 'O CNPJ consultado no portal foi alterado. Inicie outra consulta com o CNPJ desejado.')
-            return
-        self.submitted = True
-        self.searched = self.stage == 'pesquisa'
-        if self.searched:
-            start, end = data.get('periodoInicio'), data.get('periodoFim')
-            if isinstance(start,str) and isinstance(end,str):
-                self.period = f'Período: {start[:10]} a {end[:10]} · {str(data.get("tipoPesquisa",""))[:30]}'
 
-    def response(self, response):
-        if response.request != self.current_request or self.result is not None: return
-        task = asyncio.create_task(self._read(response))
-        self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
+def parse_federal_pdf(content,cnpj,expected_control=None):
+    from pypdf import PdfReader
+    try:
+        reader=PdfReader(io.BytesIO(content))
+        if not 1<=len(reader.pages)<=5:raise ValueError('Quantidade de páginas inesperada')
+        text='\n'.join(page.extract_text() or '' for page in reader.pages)
+    except Exception as error:
+        raise FederalError(f'Não foi possível ler o PDF federal ({type(error).__name__}).')
+    compact=re.sub(r'[^A-Z0-9]','',text.upper())
+    normalized=re.sub(r'\s+',' ',fold(text)).strip()
+    if cnpj not in compact:
+        raise FederalError('O PDF federal não corresponde ao CNPJ solicitado.')
+    if not all(term in normalized for term in ('secretaria da receita federal do brasil','procuradoria-geral da fazenda nacional','certidao')):
+        raise FederalError('O arquivo não contém a identificação esperada da Receita e da PGFN.')
+    control=re.search(r'codigo de controle da certidao:\s*([a-z0-9.]+)',normalized)
+    issued=re.search(r'emitida\s+as\s+(\d{2}:\d{2}:\d{2})\s+do\s+dia\s+(\d{2}/\d{2}/\d{4})',normalized)
+    valid=re.search(r'valida\s+ate\s*:?\s*(\d{2}/\d{2}/\d{4})',normalized)
+    name=re.search(r'nome:\s*(.+?)\s+cnpj:',normalized)
+    if not all((control,issued,valid,name)):
+        raise FederalError('Não foi possível identificar contribuinte, controle, emissão e validade no PDF federal.')
+    if expected_control and re.sub(r'\W','',control[1]).upper()!=re.sub(r'\W','',expected_control).upper():
+        raise FederalError('O PDF federal não corresponde à certidão selecionada.')
+    kind=('Positiva com efeitos de negativa' if 'certidao positiva com efeitos de negativa' in normalized else
+          'Negativa' if 'certidao negativa de debitos' in normalized else
+          'Positiva' if 'certidao positiva de debitos' in normalized else None)
+    if not kind:raise FederalError('O tipo da certidão federal não foi reconhecido.')
+    try:
+        issued_at=datetime.strptime(issued[2]+' '+issued[1],'%d/%m/%Y %H:%M:%S')
+        valid_until=datetime.strptime(valid[1],'%d/%m/%Y').date()
+    except ValueError:raise FederalError('O PDF federal contém data de emissão ou validade inválida.')
+    return {'cnpj':cnpj,'name':name[1].strip().upper(),'type':kind,'control':control[1].upper(),
+            'issued_at':issued_at.isoformat(),'valid_until':valid_until.isoformat(),
+            'issuer':'Receita Federal / PGFN'}
 
-    async def _read(self, response):
-        request, stage = response.request, self.stage
-        try: body = await response.json()
-        except Exception: body = None
-        if request != self.current_request: return
-        self.result = parse_response(response.status, body, stage)
 
-    def decorate(self, result):
-        evidence = result.get('evidence','')
-        return {**result, 'evidence': '\n'.join(s for s in (self.period,evidence) if s),
-                'submitted': self.submitted, 'searched': self.searched, 'stage': self.stage}
+class ResponseInbox:
+    """Lê apenas corpos JSON da API oficial; não guarda cabeçalhos, cookies ou tokens."""
+    def __init__(self,cnpj):
+        self.cnpj=cnpj;self.items=[];self.used=set();self.event=asyncio.Event();self.tasks=set()
+
+    def response(self,response):
+        parsed=urlsplit(response.url)
+        if parsed.scheme!='https' or parsed.hostname!=HOST or not parsed.path.startswith(ROOT_API+'/'):return
+        task=asyncio.create_task(self._read(response,parsed.path));self.tasks.add(task);task.add_done_callback(self.tasks.discard)
+
+    async def _read(self,response,path):
+        try:
+            length=int(response.headers.get('content-length','0') or 0)
+            body=None if length>MAX_PDF*2 else await asyncio.wait_for(response.json(),10)
+        except Exception:body=None
+        ni=kind=None
+        if response.request.method=='POST':
+            try:data=response.request.post_data_json
+            except Exception:data=None
+            if isinstance(data,dict):
+                ni=data.get('ni');kind=data.get('tipoContribuinte') or data.get('tipoContribuinteEnum')
+        self.items.append({'path':path,'status':response.status,'body':body,'ni':ni,'kind':kind})
+        self.event.set()
+
+    async def wait(self,predicate,timeout=45):
+        deadline=time.monotonic()+timeout
+        while True:
+            for index,item in enumerate(self.items):
+                if index not in self.used and predicate(item):
+                    self.used.add(index)
+                    if item['ni'] is not None and re.sub(r'[^A-Z0-9]','',str(item['ni']).upper())!=self.cnpj:
+                        raise FederalError('O CNPJ enviado pelo portal foi alterado. Inicie uma nova consulta.')
+                    return item
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise FederalError('A Receita não concluiu esta etapa no prazo.','indisponivel')
+            self.event.clear()
+            try:await asyncio.wait_for(self.event.wait(),remaining)
+            except asyncio.TimeoutError:raise FederalError('A Receita não concluiu esta etapa no prazo.','indisponivel')
 
     async def close(self):
-        for task in list(self.tasks): task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+        for task in list(self.tasks):task.cancel()
+        await asyncio.gather(*self.tasks,return_exceptions=True)
 
 
-async def submit_period(page, cnpj):
-    """A segunda tela inicia com o último ano por data de emissão."""
-    if not urlsplit(page.url).fragment.rstrip('/').endswith('/cnpj/consultar'): return False
-    metadata = await page.locator('#metadados').inner_text()
-    if cnpj not in re.sub(r'[^A-Z0-9]','',metadata.upper()):
-        raise ValueError('CNPJ divergente na segunda etapa')
-    dates = []
+async def submit_period(page,cnpj):
+    if not urlsplit(page.url).fragment.rstrip('/').endswith('/cnpj/consultar'):raise FederalError('A Receita não abriu a pesquisa de certidões.')
+    metadata=await page.locator('#metadados').inner_text()
+    if cnpj not in re.sub(r'[^A-Z0-9]','',metadata.upper()):raise FederalError('CNPJ divergente na pesquisa federal.')
+    values=[]
     for name in ('dataInicial','dataFinal'):
-        field = page.locator(f'br-date-picker[formcontrolname="{name}"] input').first
-        dates.append(datetime.strptime(await field.input_value(), '%d/%m/%Y'))
-    if dates[0] > dates[1]: raise ValueError('Período inválido')
+        value=await page.locator(f'br-date-picker[formcontrolname="{name}"] input').first.input_value()
+        values.append(datetime.strptime(value,'%d/%m/%Y'))
+    if values[0]>values[1]:raise FederalError('O portal apresentou um período de pesquisa inválido.')
     await page.get_by_role('button',name='Consultar Certidão',exact=True).click()
-    return True
+    return f'Período: {values[0].strftime("%d/%m/%Y")} a {values[1].strftime("%d/%m/%Y")}'
 
 
-async def consult_federal(browser, cnpj, assisted=False, update=None):
-    page = await browser.new_page(locale='pt-BR')
-    page.set_default_timeout(12000)
-    trace = FederalTrace(cnpj)
-    page.on('request', trace.request)
-    page.on('response', trace.response)
-    last_notice = None
-    def notice(message):
-        nonlocal last_notice
-        if update and message != last_notice:
-            update(status='aguardando_usuario', message=message)
-            last_notice = message
+def pdf_result(content,cnpj,source,expected_control=None,certificate_count=1):
+    certificate=parse_federal_pdf(content,cnpj,expected_control)
+    evidence=(f"{certificate['name']}\nCNPJ: {cnpj[:2]}.{cnpj[2:5]}.{cnpj[5:8]}/{cnpj[8:12]}-{cnpj[12:]}\n"
+              f"Tipo: {certificate['type']}\nControle: {certificate['control']}\n"
+              f"Emissão: {datetime.fromisoformat(certificate['issued_at']).strftime('%d/%m/%Y %H:%M:%S')}\n"
+              f"Válida até: {datetime.fromisoformat(certificate['valid_until']).strftime('%d/%m/%Y')}")
+    return outcome('encontrada','Certidão federal obtida automaticamente. O PDF está disponível para download.',
+                   evidence,submitted=True,searched=True,stage=source,certificate=certificate,
+                   certificate_count=certificate_count,_pdf=content)
+
+
+async def consult_federal(browser,cnpj,assisted=False,update=None):
+    contexts=getattr(browser,'contexts',[])
+    if contexts:
+        context=contexts[0]
+        usable=[candidate for candidate in context.pages if candidate.url=='about:blank']
+        page=usable[0] if usable else await context.new_page()
+    else:
+        page=await browser.new_page(locale='pt-BR');context=page.context
+    page.set_default_timeout(15000)
+    inbox=ResponseInbox(cnpj);context.on('response',inbox.response)
+    stage='acesso';submitted=False;searched=False
+    def progress(message):
+        if update:update(status='consultando',message=message)
     try:
-        response = await page.goto(URL,wait_until='domcontentloaded',timeout=25000)
-        if response and response.status >= 400:
-            return trace.decorate(outcome('bloqueado' if response.status in (401,403,429) else 'indisponivel',
-                                          f'O portal respondeu HTTP {response.status}.'))
-        field = page.locator('input[name="niContribuinte"]')
-        await field.wait_for(state='visible')
-        await page.wait_for_timeout(2500)
-        accept = page.get_by_role('button',name='Aceitar',exact=True)
-        if await accept.is_visible(): await accept.click()
-        formatted = f'{cnpj[:2]}.{cnpj[2:5]}.{cnpj[5:8]}/{cnpj[8:12]}-{cnpj[12:]}'
-        await field.fill(formatted)
-        await field.press('Tab')
-        if re.sub(r'[.\-/\s]','',await field.input_value()).upper() != cnpj:
-            return trace.decorate(outcome('manual','Não foi possível preencher o CNPJ de forma confiável.'))
-        if assisted:
-            await page.bring_to_front()
-            notice('No Edge aberto, clique em Consultar Certidão e conclua a validação humana. A ferramenta aguarda por até 3 minutos; feche essa janela para encerrar.')
-        else:
-            await page.get_by_role('button',name='Consultar Certidão',exact=True).click()
-        deadline = time.monotonic() + (180 if assisted else 35)
-        period_submitted = False
-        while time.monotonic() < deadline:
-            if page.is_closed():
-                return trace.decorate(outcome('manual','A janela de consulta foi fechada antes de confirmar o resultado.'))
-            if trace.result:
-                if assisted and trace.result['status'] == 'captcha':
-                    notice('A Receita recusou a validação. No Edge, feche o aviso e tente a validação manualmente. Nenhuma certidão foi confirmada.')
-                else:
-                    return trace.decorate(trace.result)
-            if not period_submitted and not trace.searched and urlsplit(page.url).fragment.rstrip('/').endswith('/cnpj/consultar'):
-                period_submitted = await submit_period(page,cnpj)
-                if update: update(status='consultando',message='Pesquisando certidões no período exibido pela Receita…')
-            # Somente um desafio visível é tratado como pendência humana.
-            challenge = page.locator('iframe[title*="challenge" i]:visible, iframe[title*="desafio" i]:visible')
-            if await challenge.count():
-                if not assisted:
-                    return trace.decorate(outcome('captcha','O portal exige validação humana. Use a consulta com validação humana no Edge.'))
-                notice('Conclua o desafio de validação diretamente na janela do Edge. A leitura do resultado continuará automaticamente.')
-            await asyncio.sleep(.5)
-        return trace.decorate(outcome('captcha' if assisted else 'manual',
-                                      'O prazo da consulta terminou sem confirmação de certidão. Inicie outra tentativa quando puder concluir a validação.' if assisted else
-                                      'O portal não concluiu a consulta no prazo. Tente a consulta com validação humana no Edge.'))
+        response=await page.goto(URL,wait_until='domcontentloaded',timeout=40000)
+        if response and response.status>=400:
+            raise FederalError(f'O portal respondeu HTTP {response.status}.',
+                               'bloqueado' if response.status in (401,403,429) else 'indisponivel')
+        field=page.locator('input[name="niContribuinte"]');await field.wait_for(state='visible')
+        await page.wait_for_timeout(3500)
+        accept=page.get_by_role('button',name='Aceitar',exact=True)
+        if await accept.is_visible():await accept.click()
+        formatted=f'{cnpj[:2]}.{cnpj[2:5]}.{cnpj[5:8]}/{cnpj[8:12]}-{cnpj[12:]}'
+        await field.click();await field.press('Control+A');await field.press_sequentially(formatted,delay=60);await field.press('Tab')
+        if re.sub(r'[^A-Z0-9]','',await field.input_value()).upper()!=cnpj:
+            raise FederalError('Não foi possível preencher o CNPJ de forma confiável.')
+
+        stage='verificacao';progress('Verificando se já existe uma certidão federal válida…')
+        await page.get_by_role('button',name='Emitir Certidão',exact=True).click()
+        verify=await inbox.wait(lambda item:item['path']==EMISSION+'/verificar',30);submitted=True
+        failure=validation_failure(verify)
+        if failure:raise failure
+        state=verify['body'].get('status')
+
+        if state=='Emitida':
+            progress('Certidão válida encontrada. Obtendo a segunda via em PDF…')
+            modal=page.get_by_role('button',name='Emitir Nova Certidão',exact=True)
+            await modal.wait_for(state='visible',timeout=20000)
+            await page.get_by_role('button',name='Consultar Certidão',exact=True).last.click()
+            validation=await inbox.wait(lambda item:item['path']==API+'/validar-contribuinte',60)
+            failure=validation_failure(validation)
+            if failure:raise failure
+            await page.wait_for_url('**/cnpj/consultar',timeout=20000)
+            stage='pesquisa';period=await submit_period(page,cnpj);searched=True
+            search=await inbox.wait(lambda item:item['path']==API,45)
+            failure=validation_failure(search)
+            if failure:raise failure
+            parsed=parse_response(search['status'],search['body'],'pesquisa')
+            if parsed['status']!='encontrada':return {**parsed,'submitted':True,'searched':True,'stage':stage}
+            certs=search['body'].get('certidoes',[])
+            candidates=[(index,cert) for index,cert in enumerate(certs[:5]) if isinstance(cert,dict) and cert.get('hasSegundaVia') is not False]
+            if not candidates:raise FederalError('A Receita listou certidões, mas não liberou uma segunda via em PDF.')
+            valid=[pair for pair in candidates if fold(str(pair[1].get('situacao','')))=='valida']
+            index,selected=(valid or candidates)[0]
+            await page.wait_for_url('**/cnpj/consultar/resultado',timeout=20000)
+            buttons=page.locator('button[title="Segunda via"]');await buttons.first.wait_for(state='visible',timeout=15000)
+            if index>=await buttons.count():index=0;selected=candidates[0][1]
+            await buttons.nth(index).click()
+            copy=await inbox.wait(lambda item:item['path'].startswith(API+'/seg-via/'),45)
+            failure=validation_failure(copy)
+            if failure:raise failure
+            content=decode_pdf(copy['body'])
+            result=pdf_result(content,cnpj,'segunda_via',selected.get('numeroControle'),len(certs))
+            result['evidence']=period+'\n'+result['evidence']
+            return result
+
+        if state not in ('NaoEmitida','ContinuarEmissao'):
+            detail=message_text(verify['body'])
+            raise FederalError(detail or 'A Receita não liberou a emissão da certidão.',
+                               'indisponivel' if state=='SistemaIndisponivel' else 'manual',f'Retorno: {str(state)[:80]}')
+
+        stage='emissao';progress('Emitindo uma nova certidão federal e preparando o PDF…')
+        await page.wait_for_url('**/cnpj/resultado',timeout=20000)
+        deadline=time.monotonic()+45
+        while True:
+            emission=await inbox.wait(lambda item:item['path']==EMISSION,max(1,deadline-time.monotonic()))
+            failure=validation_failure(emission)
+            if failure:raise failure
+            state=emission['body'].get('statusEmissao')
+            if state!='EmProcessamento':break
+        if state!='Sucesso':
+            detail=message_text(emission['body'])
+            raise FederalError(detail or 'A Receita não emitiu a certidão.',
+                               'indisponivel' if state=='SistemaIndisponivel' else 'manual',f'Retorno: {str(state)[:80]}')
+        return pdf_result(decode_pdf(emission['body']),cnpj,'emissao')
+    except FederalError as error:
+        return outcome(error.status,str(error),error.evidence,submitted=submitted,searched=searched,stage=stage)
     except Exception as error:
-        reason = 'Tempo de resposta excedido.' if 'Timeout' in type(error).__name__ else 'Não foi possível concluir esta etapa do portal.'
-        return trace.decorate(outcome('indisponivel',reason+' Nenhuma certidão foi confirmada.',f'Etapa: {trace.stage} · {type(error).__name__}'))
+        reason='Tempo de resposta excedido.' if 'Timeout' in type(error).__name__ else 'Não foi possível concluir esta etapa do portal.'
+        return outcome('indisponivel',reason+' Nenhuma certidão foi confirmada.',f'Etapa: {stage} · {type(error).__name__}',
+                       submitted=submitted,searched=searched,stage=stage)
     finally:
-        page.remove_listener('request', trace.request)
-        page.remove_listener('response', trace.response)
-        await trace.close()
-        if not page.is_closed(): await page.close()
+        context.remove_listener('response',inbox.response);await inbox.close()
+        if not page.is_closed():await page.close()
