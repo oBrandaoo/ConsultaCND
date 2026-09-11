@@ -1,6 +1,6 @@
 ﻿# Escopo atual — consulta de CNDs
 
-Atualizado em 10/09/2026: a ferramenta deve servir somente para consultar certidões. O usuário aceitou começar por uma certidão automática e depois solicitou Pouso Alegre. O MVP agora cobre, sem custo, as **CNDs municipais de Santa Rita do Sapucaí e Pouso Alegre**. O escopo anterior de gestão da carteira foi substituído.
+Atualizado em 10/09/2026: a ferramenta deve servir somente para consultar certidões. O usuário aceitou começar por uma certidão automática e depois solicitou Pouso Alegre. Há conectores gratuitos para as **CNDs municipais de Santa Rita do Sapucaí e Pouso Alegre**, mas Pouso Alegre permanece incompleta no ambiente do usuário devido ao bloqueio `EST-000549` reproduzido antes do formulário. O escopo anterior de gestão da carteira foi substituído.
 
 ## Fluxo
 
@@ -28,13 +28,17 @@ Não fazem parte do produto atual: cadastro de empresas, importação de carteir
 
 A interface e a API são exclusivamente de consultas. O conector municipal de Santa Rita foi validado ao vivo com CNPJ 24.492.886/0001-04 (FINATEL), sem login nem CAPTCHA: retornou CND negativa e PDF, válido até 09/12/2026. Confere a identidade antes da emissão e compara CNPJ, nome, controle e datas do PDF com a tela.
 
-O conector de Pouso Alegre foi validado ao vivo com CNPJ 23.951.916/0001-22 (FUVS), sem login ou ação do usuário na janela do portal. A consulta final retornou a CND 64217/2026, controle `WGT211201-000-SYXKELIVAQOLQZ-2`, emitida em 10/09/2026 e válida por 90 dias, até 09/12/2026. A aplicação verifica no PDF a prefeitura, declaração negativa, CNPJ, nome, número, controle, emissão e validade. Nenhuma senha é pedida. Os PDFs permanecem apenas na memória pelo prazo da consulta, salvo se o usuário fizer download.
+Há registro de validação anterior do conector de Pouso Alegre ao vivo com CNPJ 23.951.916/0001-22 (FUVS), sem login ou ação do usuário na janela do portal. A consulta final retornou a CND 64217/2026, controle `WGT211201-000-SYXKELIVAQOLQZ-2`, emitida em 10/09/2026 e válida por 90 dias, até 09/12/2026. A aplicação verifica no PDF a prefeitura, declaração negativa, CNPJ, nome, número, controle, emissão e validade. Nenhuma senha é pedida. Os PDFs permanecem apenas na memória pelo prazo da consulta, salvo se o usuário fizer download.
+
+Na investigação posterior do erro, a sessão temporária do conector retornou `EST-000549` antes do envio de CNPJ, inclusive com Edge direto via CDP. O usuário informou que o formulário abre no navegador habitual. A emissão com um clique ainda não foi restabelecida; o sucesso anterior não encerra essa pendência. Não foi emitida nova certidão nesta investigação.
+
+Após o relato de fechamento antes do formulário ou de um aviso rápido, a espera inicial foi ajustada para até 60 segundos. Um aviso de segurança é exibido no aplicativo enquanto a mesma página permanece aberta. A automação prossegue se o aviso desaparecer e o formulário for liberado; um bloqueio persistente encerra ao final do prazo. Não há recarga automática, repetição de submissões ou interação automática com o aviso.
 
 O conector federal distingue a validação inicial do CNPJ da segunda etapa de pesquisa por período. Executa essa pesquisa quando a Receita permite avançar e lê a resposta estruturada vinculada ao CNPJ solicitado. A captura federal de certidão real ainda não foi validada ao vivo.
 
 Após uma falha federal, a opção **Validar no Edge e consultar** abre o portal com o CNPJ preenchido e aguarda intervenção humana por até 3 minutos. O usuário resolve a validação diretamente no portal; a ferramenta retoma a pesquisa e a leitura do resultado. Fechar a janela encerra a tentativa. Isso não equivale a automação sem intervenção.
 
-Nos demais órgãos e em Itajubá, a ferramenta verifica o acesso ao portal, mas ainda não submete consulta por CNPJ. Cada cartão informa quando a conclusão é manual. Não há tentativa de contornar CAPTCHA ou bloqueios. Em Pouso Alegre, o CAPTCHA invisível roda normalmente numa janela visível; se o portal retornar atividade incomum (`EST-000549`), a consulta termina como validação humana, sem inferência fiscal. A automação municipal não garante emissão para CNPJs sem cadastro ou com restrições, nem foi validada com toda a carteira de 50–100 empresas.
+Nos demais órgãos e em Itajubá, a ferramenta verifica o acesso ao portal, mas ainda não submete consulta por CNPJ. Cada cartão informa quando a conclusão é manual. Não há tentativa de contornar CAPTCHA ou bloqueios. Em Pouso Alegre, o CAPTCHA invisível roda normalmente numa janela visível; se o portal retornar atividade incomum (`EST-000549`), a consulta termina como acesso bloqueado, com a mensagem original do órgão e sem inferência fiscal. O aviso não comprova a existência de um desafio manual nem o bloqueio de todas as sessões da rede. A automação municipal não garante emissão para CNPJs sem cadastro ou com restrições, nem foi validada com toda a carteira de 50–100 empresas.
 
 Resultados são temporários, mantidos em memória. O banco da versão anterior de gestão permanece intacto e não é utilizado.
 
