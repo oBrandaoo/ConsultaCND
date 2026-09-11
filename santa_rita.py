@@ -77,7 +77,12 @@ def validate_pdf(content,certificate):
 async def wait_for_portal(page,target,timeout=25):
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:
-        if await target.is_visible(): return
+        try:
+            visible=await target.is_visible(timeout=500)
+        except Exception as error:
+            if type(error).__name__!='TimeoutError':raise
+            visible=False
+        if visible:return
         messages=await page.locator('.ui-messages-error-summary:visible, .ui-message-error-detail:visible, .ui-growl-title:visible').all_inner_texts()
         if messages: raise PortalError('Retorno da prefeitura: '+'; '.join(messages)[:1000])
         if await page.locator('input[type=password]:visible').count():

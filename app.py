@@ -1,5 +1,6 @@
 ﻿"""Certifica: interface local dedicada a consultas pontuais de CNDs."""
 import argparse
+import base64
 import json
 import os
 import re
@@ -12,7 +13,7 @@ ROOT=Path(__file__).resolve().parent
 
 class Server(ThreadingHTTPServer):
     daemon_threads=True
-    def __init__(self,address,consultations=None,allowed_hosts=None):
+    def __init__(self,address,consultations=None,allowed_hosts=None,basic_auth=None):
         self.consultations=consultations or Consultations()
         self.token=secrets.token_urlsafe(32)
         configured=allowed_hosts if allowed_hosts is not None else os.environ.get('CERTIFICA_ALLOWED_HOSTS','')
@@ -22,12 +23,21 @@ class Server(ThreadingHTTPServer):
         if any('/' in host or ':' in host for host in hosts):
             raise ValueError('CERTIFICA_ALLOWED_HOSTS deve conter apenas nomes separados por vírgula, sem porta ou protocolo.')
         self.allowed_hosts=frozenset(hosts|{'localhost','127.0.0.1'})
+        if basic_auth is None:
+            user=os.environ.get('CERTIFICA_BASIC_USER','')
+            password=os.environ.get('CERTIFICA_BASIC_PASSWORD','')
+        else:
+            user,password=basic_auth
+        if bool(user)!=bool(password):
+            raise ValueError('CERTIFICA_BASIC_USER e CERTIFICA_BASIC_PASSWORD devem ser definidos juntos.')
+        credentials=base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii') if user else None
+        self.auth_header=f'Basic {credentials}' if credentials else None
         super().__init__(address,Handler)
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):
         pass
-    def send_data(self,status,body,kind='application/json; charset=utf-8',filename=None):
+    def send_data(self,status,body,kind='application/json; charset=utf-8',filename=None,headers=None):
         if not isinstance(body,bytes):
             body=json.dumps(body,ensure_ascii=False).encode('utf-8')
         self.send_response(status)
@@ -35,6 +45,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length',str(len(body)))
         if filename:
             self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
+        for name,value in (headers or {}).items():
+            self.send_header(name,value)
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
         self.send_header('X-Frame-Options','DENY')
@@ -54,12 +66,22 @@ class Handler(BaseHTTPRequestHandler):
             return True
         parsed=urlsplit(origin)
         return parsed.scheme in ('http','https') and parsed.netloc.lower()==self.headers.get('Host','').lower()
+    def authenticated(self):
+        expected=self.server.auth_header
+        return expected is None or secrets.compare_digest(self.headers.get('Authorization',''),expected)
+    def require_authentication(self):
+        if self.authenticated():return True
+        self.send_data(401,{'error':'Autenticação necessária.'},headers={
+            'WWW-Authenticate':'Basic realm="Certifica", charset="UTF-8"'
+        })
+        return False
     def do_GET(self):
         if not self.valid_host():
             return self.send_data(403,{'error':'Host não permitido.'})
         path=urlsplit(self.path).path
         if path=='/healthz':
             return self.send_data(200,{'status':'ok'})
+        if not self.require_authentication():return
         if path=='/api/config':
             return self.send_data(200,{**self.server.consultations.config(),'token':self.server.token})
         document=re.fullmatch(r'/api/consultations/([A-Za-z0-9_-]+)/documents/(federal|municipal)',path)
@@ -81,7 +103,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_data(200,(ROOT/'static'/name).read_bytes(),kind)
         self.send_data(404,{'error':'Página não encontrada.'})
     def do_POST(self):
-        if not self.valid_host() or self.headers.get('X-CSRF-Token')!=self.server.token:
+        if not self.valid_host():
+            return self.send_data(403,{'error':'Host não permitido.'})
+        if not self.require_authentication():return
+        if self.headers.get('X-CSRF-Token')!=self.server.token:
             return self.send_data(403,{'error':'Recarregue a página antes de consultar.'})
         if not self.valid_origin():
             return self.send_data(403,{'error':'Origem não permitida.'})

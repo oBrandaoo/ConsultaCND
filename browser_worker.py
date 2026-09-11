@@ -60,13 +60,19 @@ async def launch_server_browser(playwright):
     """Executa Chromium no host; com Xvfb, headless=False não abre janela para o usuário."""
     profile = Path(os.environ.get('CERTIFICA_PROFILE_DIR', str(ROOT / '.runtime/server-browser-profile')))
     profile.mkdir(parents=True, exist_ok=True)
+    headless = env_bool('CERTIFICA_HEADLESS', False)
+    arguments = ['--no-sandbox', '--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage']
+    # A prévia sem Docker roda no Windows. O Chromium completo fica fora da área
+    # visível, reproduzindo o navegador headed que o Xvfb hospeda no contêiner.
+    if os.name == 'nt' and not headless:
+        arguments.extend(['--window-position=-32000,-32000', '--window-size=1365,900'])
     try:
         context = await playwright.chromium.launch_persistent_context(
             str(profile),
-            headless=env_bool('CERTIFICA_HEADLESS', False),
+            headless=headless,
             locale='pt-BR',
             viewport={'width': 1365, 'height': 900},
-            args=['--no-sandbox', '--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage'],
+            args=arguments,
         )
         return PersistentBrowser(context), None, None
     except Exception as error:
@@ -138,7 +144,14 @@ async def launch_federal_browser(playwright):
 
 async def launch_municipal_browser(playwright):
     if browser_mode() == 'server':
-        return await playwright.chromium.launch(headless=True)
+        headless = env_bool('CERTIFICA_HEADLESS', False)
+        arguments = []
+        if os.name == 'nt' and not headless:
+            arguments.extend([
+                '--window-position=-32000,-32000',
+                '--window-size=1365,900',
+            ])
+        return await playwright.chromium.launch(headless=headless, args=arguments)
     return await playwright.chromium.launch(channel='msedge', headless=True)
 
 
