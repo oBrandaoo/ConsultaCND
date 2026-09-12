@@ -200,6 +200,29 @@ def pdf_result(content,cnpj,source,expected_control=None,certificate_count=1):
                    certificate_count=certificate_count,_pdf=content)
 
 
+async def accept_response_or_wait_for_user(inbox,item,predicate,assisted,update,action):
+    """No Edge local, mantém a consulta viva para uma validação humana eventual."""
+    failure=validation_failure(item)
+    if not failure or failure.status!='captcha' or not assisted:
+        return item,failure
+    if update:
+        update(status='aguardando_usuario',message=(
+            f'A Receita pediu validação humana. Conclua-a no Edge e {action}; '
+            'a consulta continuará automaticamente.'
+        ))
+    try:
+        item=await inbox.wait(predicate,180)
+    except FederalError:
+        raise FederalError(
+            'A validação da Receita não foi concluída no Edge dentro de 3 minutos.',
+            'captcha',failure.evidence
+        )
+    failure=validation_failure(item)
+    if not failure and update:
+        update(status='consultando',message='Validação concluída. Continuando a consulta federal…')
+    return item,failure
+
+
 async def consult_federal(browser,cnpj,assisted=False,update=None):
     contexts=getattr(browser,'contexts',[])
     if contexts:
@@ -229,8 +252,11 @@ async def consult_federal(browser,cnpj,assisted=False,update=None):
 
         stage='verificacao';progress('Verificando se já existe uma certidão federal válida…')
         await page.get_by_role('button',name='Emitir Certidão',exact=True).click()
-        verify=await inbox.wait(lambda item:item['path']==EMISSION+'/verificar',30);submitted=True
-        failure=validation_failure(verify)
+        verify_predicate=lambda item:item['path']==EMISSION+'/verificar'
+        verify=await inbox.wait(verify_predicate,30);submitted=True
+        verify,failure=await accept_response_or_wait_for_user(
+            inbox,verify,verify_predicate,assisted,update,'clique novamente em “Emitir Certidão”'
+        )
         if failure:raise failure
         state=verify['body'].get('status')
 
@@ -239,13 +265,19 @@ async def consult_federal(browser,cnpj,assisted=False,update=None):
             modal=page.get_by_role('button',name='Emitir Nova Certidão',exact=True)
             await modal.wait_for(state='visible',timeout=20000)
             await page.get_by_role('button',name='Consultar Certidão',exact=True).last.click()
-            validation=await inbox.wait(lambda item:item['path']==API+'/validar-contribuinte',60)
-            failure=validation_failure(validation)
+            validation_predicate=lambda item:item['path']==API+'/validar-contribuinte'
+            validation=await inbox.wait(validation_predicate,60)
+            validation,failure=await accept_response_or_wait_for_user(
+                inbox,validation,validation_predicate,assisted,update,'clique novamente em “Consultar Certidão”'
+            )
             if failure:raise failure
             await page.wait_for_url('**/cnpj/consultar',timeout=20000)
             stage='pesquisa';period=await submit_period(page,cnpj);searched=True
-            search=await inbox.wait(lambda item:item['path']==API,45)
-            failure=validation_failure(search)
+            search_predicate=lambda item:item['path']==API
+            search=await inbox.wait(search_predicate,45)
+            search,failure=await accept_response_or_wait_for_user(
+                inbox,search,search_predicate,assisted,update,'clique novamente em “Consultar Certidão”'
+            )
             if failure:raise failure
             parsed=parse_response(search['status'],search['body'],'pesquisa')
             if parsed['status']!='encontrada':return {**parsed,'submitted':True,'searched':True,'stage':stage}
@@ -258,8 +290,11 @@ async def consult_federal(browser,cnpj,assisted=False,update=None):
             buttons=page.locator('button[title="Segunda via"]');await buttons.first.wait_for(state='visible',timeout=15000)
             if index>=await buttons.count():index=0;selected=candidates[0][1]
             await buttons.nth(index).click()
-            copy=await inbox.wait(lambda item:item['path'].startswith(API+'/seg-via/'),45)
-            failure=validation_failure(copy)
+            copy_predicate=lambda item:item['path'].startswith(API+'/seg-via/')
+            copy=await inbox.wait(copy_predicate,45)
+            copy,failure=await accept_response_or_wait_for_user(
+                inbox,copy,copy_predicate,assisted,update,'clique novamente no botão de segunda via'
+            )
             if failure:raise failure
             content=decode_pdf(copy['body'])
             result=pdf_result(content,cnpj,'segunda_via',selected.get('numeroControle'),len(certs))
@@ -276,7 +311,10 @@ async def consult_federal(browser,cnpj,assisted=False,update=None):
         deadline=time.monotonic()+45
         while True:
             emission=await inbox.wait(lambda item:item['path']==EMISSION,max(1,deadline-time.monotonic()))
-            failure=validation_failure(emission)
+            emission_predicate=lambda item:item['path']==EMISSION
+            emission,failure=await accept_response_or_wait_for_user(
+                inbox,emission,emission_predicate,assisted,update,'confirme a emissão novamente no portal'
+            )
             if failure:raise failure
             state=emission['body'].get('statusEmissao')
             if state!='EmProcessamento':break

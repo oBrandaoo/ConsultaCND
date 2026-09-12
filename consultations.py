@@ -19,6 +19,7 @@ if (ROOT / '.tools').exists():
     sys.path.insert(0, str(ROOT / '.tools'))
 SERVICES = {
     'federal': {'label':'CND federal', 'issuer':'Receita Federal / PGFN', 'url':'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj', 'mode':'Nacional · emissão ou segunda via automática com PDF'},
+    'fgts': {'label':'CRF do FGTS', 'issuer':'Caixa Econômica Federal', 'url':'https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf', 'mode':'Nacional · consulta pública automática com PDF'},
     'municipal': {'label':'CND municipal', 'issuer':'Prefeitura de Santa Rita do Sapucaí', 'url':'https://servicoswebsantaritasapucai.sgpcloud.net:8443/servicosweb/home.jsf', 'mode':'Santa Rita do Sapucaí · automática com PDF'},
 }
 STATUS = {'aguardando':'Aguardando','consultando':'Consultando','encontrada':'Certidão localizada',
@@ -103,7 +104,10 @@ async def run_portal(browser,service,cnpj,city,assisted=False,update=None):
     if service=='federal':
         from federal import consult_federal
         return await consult_federal(browser,cnpj,assisted,update)
-    raise ValidationError('Esta versão consulta somente a CND federal ou a municipal de Santa Rita.')
+    if service=='fgts':
+        from fgts import consult_fgts
+        return await consult_fgts(browser,cnpj,assisted,update)
+    raise ValidationError('Esta versão consulta somente a CND federal, o CRF do FGTS ou a municipal de Santa Rita.')
 
 class Consultations:
     def __init__(self,runner=None,max_queue=None):
@@ -125,16 +129,17 @@ class Consultations:
 
     def start(self,data):
         if set(data) - {'cnpj','services'}:
-            raise ValidationError('Envie somente o CNPJ para a consulta federal.')
+            raise ValidationError('Envie somente o CNPJ e as certidões selecionadas.')
         cnpj=normalize_cnpj(data.get('cnpj'))
         services=data.get('services')
-        if (not isinstance(services,list) or not services or len(services)>2 or
+        if (not isinstance(services,list) or not services or len(services)>len(SERVICES) or
                 any(not isinstance(service,str) or service not in SERVICES for service in services) or
                 len(set(services))!=len(services)):
-            raise ValidationError('Selecione a CND federal, a municipal de Santa Rita ou ambas, sem repetições.')
-        assisted='federal' in services
-        scope=('Brasil + Santa Rita do Sapucaí · MG' if len(services)==2 else
-               'Brasil' if services==['federal'] else 'Santa Rita do Sapucaí · MG')
+            raise ValidationError('Selecione a CND federal, o CRF do FGTS ou a municipal de Santa Rita, sem repetições.')
+        from browser_worker import browser_mode
+        assisted=bool({'federal','fgts'} & set(services)) and browser_mode()=='local-edge'
+        scope=('Brasil + Santa Rita do Sapucaí · MG' if 'municipal' in services and len(services)>1 else
+               'Santa Rita do Sapucaí · MG' if services==['municipal'] else 'Brasil')
         with self.lock:
             self._expire()
             rid=secrets.token_urlsafe(18)
@@ -194,8 +199,8 @@ class Consultations:
             result=run['results'].get(service) if run else None
             if service not in SERVICES or not result or result['status']!='encontrada' or not result.get('_pdf'):
                 raise ValidationError('PDF não encontrado ou expirado. Inicie uma nova consulta.')
-            scope='federal' if service=='federal' else 'santa-rita'
-            return result['_pdf'],f'cnd-{scope}-{run["cnpj"]}.pdf'
+            prefix={'federal':'cnd-federal','fgts':'crf-fgts','municipal':'cnd-santa-rita'}[service]
+            return result['_pdf'],f'{prefix}-{run["cnpj"]}.pdf'
 
     def _execute(self,rid):
         try:
@@ -222,16 +227,20 @@ class Consultations:
             async def consult(service):
                 browser=process=profile=None
                 try:
-                    if service=='federal':
-                        from browser_worker import launch_federal_browser
+                    if service in ('federal','fgts'):
+                        from browser_worker import browser_mode,launch_federal_browser
                         browser,process,profile=await launch_federal_browser(p)
-                        message='Acessando o portal oficial da Receita no navegador do servidor…'
+                        assisted=browser_mode()=='local-edge'
+                        issuer='Receita' if service=='federal' else 'Caixa'
+                        message=(f'Acessando o portal oficial da {issuer} no Edge deste computador…' if assisted else
+                                 f'Acessando o portal oficial da {issuer} no navegador do servidor…')
                     else:
                         from browser_worker import launch_municipal_browser
                         browser=await launch_municipal_browser(p)
                         message='Acessando o portal de Santa Rita do Sapucaí…'
+                        assisted=False
                     self.update(rid,service,status='consultando',message=message)
-                    result=await run_portal(browser,service,run['cnpj'],None,service=='federal',
+                    result=await run_portal(browser,service,run['cnpj'],None,assisted,
                                             lambda **changes:self.update(rid,service,**changes))
                     self.update(rid,service,**result,checked_at=timestamp())
                 except Exception as error:
@@ -242,4 +251,7 @@ class Consultations:
                     if browser:
                         from browser_worker import close_browser
                         await close_browser(browser,process,profile)
-            await asyncio.gather(*(consult(service) for service in run['results']))
+            # Federal e FGTS compartilham o mesmo perfil persistente do navegador.
+            # A execução sequencial evita duas instâncias concorrentes sobre esse perfil.
+            for service in run['results']:
+                await consult(service)

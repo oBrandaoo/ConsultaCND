@@ -2,7 +2,6 @@
 import asyncio
 import os
 import subprocess
-import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -90,11 +89,15 @@ async def launch_local_edge(playwright):
 
     runtime = ROOT / '.runtime'
     runtime.mkdir(exist_ok=True)
-    profile = tempfile.TemporaryDirectory(prefix='federal-edge-', dir=runtime)
-    port_file = Path(profile.name) / 'DevToolsActivePort'
+    profile_path = Path(os.environ.get(
+        'CERTIFICA_LOCAL_EDGE_PROFILE_DIR', str(runtime / 'local-edge-profile')
+    ))
+    profile_path.mkdir(parents=True,exist_ok=True)
+    port_file = profile_path / 'DevToolsActivePort'
+    port_file.unlink(missing_ok=True)
     arguments = [
         str(find_edge()), '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1',
-        f'--user-data-dir={profile.name}', '--no-first-run', '--disable-sync',
+        f'--user-data-dir={profile_path}', '--no-first-run', '--disable-sync',
         '--disable-features=msEdgeFirstRunExperience,msEdgeSync', '--no-default-browser-check',
         '--new-window', 'about:blank',
     ]
@@ -108,7 +111,7 @@ async def launch_local_edge(playwright):
                 endpoint = f'http://127.0.0.1:{port}'
                 await asyncio.to_thread(lambda: urllib.request.urlopen(endpoint + '/json/version', timeout=.5).close())
                 browser = await playwright.chromium.connect_over_cdp(endpoint, timeout=10000)
-                return browser, process, profile
+                return browser, process, None
             except Exception as error:
                 last_error = error
                 await asyncio.sleep(.2)
@@ -118,20 +121,11 @@ async def launch_local_edge(playwright):
         if 'process' in locals() and process.poll() is None:
             process.terminate()
         try:
-            profile.cleanup()
-        except OSError:
-            pass
-        fallback = tempfile.TemporaryDirectory(prefix='federal-playwright-', dir=runtime)
-        try:
             context = await playwright.chromium.launch_persistent_context(
-                fallback.name, channel='msedge', headless=False, locale='pt-BR',
+                str(profile_path), channel='msedge', headless=False, locale='pt-BR',
                 args=['--no-first-run', '--no-default-browser-check'])
-            return PersistentBrowser(context), None, fallback
+            return PersistentBrowser(context), None, None
         except Exception as fallback_error:
-            try:
-                fallback.cleanup()
-            except OSError:
-                pass
             raise BrowserError(
                 f'Não foi possível abrir o Edge ({type(direct_error).__name__} / {type(fallback_error).__name__}).')
 
