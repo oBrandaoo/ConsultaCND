@@ -55,11 +55,12 @@ class ClassificationTest(unittest.TestCase):
         result=assess_page('federal',CNPJ,'Entrar com gov.br\nNão foram encontradas certidões.',URL,True)
         self.assertEqual(result['status'],'sem_certidao')
 
-    def test_federal_and_santa_rita_are_available_without_city_selector(self):
+    def test_federal_fgts_and_santa_rita_are_available_without_city_selector(self):
         config=Consultations(lambda _:None).config()
-        self.assertEqual(list(config['services']),['federal','municipal'])
+        self.assertEqual(list(config['services']),['federal','fgts','municipal'])
         self.assertNotIn('cities',config)
         self.assertIn('receitafederal',portal_url('federal',None))
+        self.assertIn('consulta-crf.caixa.gov.br',portal_url('fgts',None))
         self.assertIn('santaritasapucai',portal_url('municipal',None))
 
 class EngineTest(unittest.TestCase):
@@ -87,7 +88,7 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(self.engine.get(run['id'])['results']['federal']['status'],'sem_certidao')
 
     def test_invalid_request_never_starts_browser(self):
-        for change in [{'services':[]},{'services':['unknown']},{'services':['federal','federal']},{'services':[{}]},{'city':'Pouso Alegre'},{'cnpj':'000'},{'assisted':True},{'services':['federal','fgts']}]:
+        for change in [{'services':[]},{'services':['unknown']},{'services':['federal','federal']},{'services':[{}]},{'city':'Pouso Alegre'},{'cnpj':'000'},{'assisted':True},{'services':['federal','fgts','municipal','unknown']}]:
             with self.assertRaises(ValidationError): self.engine.start({**DATA,**change})
         self.assertEqual(self.engine.runs,{})
 
@@ -161,12 +162,21 @@ class HttpTest(unittest.TestCase):
         for path in ['/','/app.js','/styles.css','/api/config','/healthz']: self.assertEqual(self.request(path)[0],200)
         self.assertEqual(self.request('/api/consultations/does-not-exist')[0],404)
 
-    def test_only_federal_and_santa_rita_requests_are_accepted(self):
+    def test_optional_basic_auth_protects_app_but_not_health(self):
+        authorization='Basic Y2xpZW50ZTpzZW5oYS1kZS10ZXN0ZQ=='
+        self.server.auth_header=authorization
+        self.assertEqual(self.request('/healthz')[0],200)
+        self.assertEqual(self.request('/api/config')[0],401)
+        headers={'Authorization':authorization}
+        self.assertEqual(self.request('/api/config',headers=headers)[0],200)
+        self.assertEqual(self.request('/api/consultations',DATA,headers)[0],202)
+
+    def test_only_configured_certificate_requests_are_accepted(self):
         status,body=self.request('/api/consultations',{'cnpj':CNPJ,'services':['estadual']})
         self.assertEqual(status,400)
         self.assertIn('Santa Rita',json.loads(body)['error'])
         config=json.loads(self.request('/api/config')[1])
-        self.assertEqual(list(config['services']),['federal','municipal'])
+        self.assertEqual(list(config['services']),['federal','fgts','municipal'])
         self.assertNotIn('cities',config)
 
     def test_santa_rita_pdf_download_matches_query(self):
@@ -200,6 +210,23 @@ class HttpTest(unittest.TestCase):
         with urllib.request.urlopen(self.base+result['document_url']) as response:
             self.assertEqual(response.headers['Content-Type'],'application/pdf')
             self.assertIn('cnd-federal-',response.headers['Content-Disposition'])
+            self.assertEqual(response.read(),content)
+
+    def test_fgts_pdf_download_matches_query(self):
+        content=b'%PDF-1.7\nFGTS controlled test\n%%EOF'
+        async def runner(rid):
+            self.engine.update(rid,'fgts',status='encontrada',message='CRF de teste.',_pdf=content)
+        self.engine.runner=runner
+        status,body=self.request('/api/consultations',{'cnpj':CNPJ,'services':['fgts']})
+        self.assertEqual(status,202)
+        rid=json.loads(body)['id']
+        deadline=time.monotonic()+3
+        while self.engine.get(rid)['running'] and time.monotonic()<deadline:time.sleep(.01)
+        result=json.loads(self.request('/api/consultations/'+rid)[1])['results']['fgts']
+        self.assertIn('/documents/fgts',result['document_url'])
+        with urllib.request.urlopen(self.base+result['document_url']) as response:
+            self.assertEqual(response.headers['Content-Type'],'application/pdf')
+            self.assertIn('crf-fgts-',response.headers['Content-Disposition'])
             self.assertEqual(response.read(),content)
 
 if __name__=='__main__': unittest.main()

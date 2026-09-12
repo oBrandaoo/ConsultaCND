@@ -1,6 +1,8 @@
 param(
     [int]$Port = 8000,
-    [string]$Python = ''
+    [string]$Python = '',
+    [string]$BasicUser = 'cliente',
+    [string]$BasicPassword = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,10 +78,16 @@ if (-not $publicUrl) {
 }
 
 $hostName = ([uri]$publicUrl).DnsSafeHost
-$env:CERTIFICA_BROWSER_MODE = 'server'
-$env:CERTIFICA_HEADLESS = 'false'
-$env:CERTIFICA_PROFILE_DIR = Join-Path $runtime 'host-browser-profile'
+if (-not $BasicPassword) {
+    $randomBytes = New-Object byte[] 18
+    [Security.Cryptography.RandomNumberGenerator]::Fill($randomBytes)
+    $BasicPassword = [Convert]::ToBase64String($randomBytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+}
+$env:CERTIFICA_BROWSER_MODE = 'local-edge'
+$env:CERTIFICA_LOCAL_EDGE_PROFILE_DIR = Join-Path $runtime 'local-edge-profile'
 $env:CERTIFICA_ALLOWED_HOSTS = $hostName
+$env:CERTIFICA_BASIC_USER = $BasicUser
+$env:CERTIFICA_BASIC_PASSWORD = $BasicPassword
 
 $appOut = Join-Path $runtime 'preview-app-output.log'
 $appErr = Join-Path $runtime 'preview-app-error.log'
@@ -106,4 +114,6 @@ if ($publicHealth.status -ne 'ok') { throw 'A URL pública não passou na verifi
 Set-Content -LiteralPath (Join-Path $runtime 'preview-url.txt') -Value $publicUrl
 
 Write-Host "Certifica publicado em: $publicUrl"
+Write-Host "Usuário: $BasicUser"
+Write-Host "Senha desta execução: $BasicPassword"
 Write-Host 'Mantenha este computador ligado e conectado à internet.'

@@ -2,7 +2,7 @@
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatCnpj=v=>v.replace(/^(.{2})(.{3})(.{3})(.{4})(.{2})$/,'$1.$2.$3/$4-$5');
-const shorts={federal:'RF',municipal:'SR'};
+const shorts={federal:'RF',fgts:'FG',municipal:'SR'};
 let config,run,pollTimer,toastTimer,pollFailures=0;
 const pending=s=>['aguardando','consultando','aguardando_usuario'].includes(s);
 const tone=s=>s==='encontrada'?'good':['bloqueado','indisponivel'].includes(s)?'bad':['login','captcha','manual','sem_certidao'].includes(s)?'warning':s==='consultando'?'info':'';
@@ -15,7 +15,7 @@ function render(){
   const results=Object.values(run.results),finished=results.filter(r=>!pending(r.status)).length,found=results.filter(r=>r.status==='encontrada').length;
   const waiting=results.some(r=>r.status==='aguardando_usuario');
   const queued=run.phase==='queued';
-  const summary=waiting?'A consulta federal aguarda uma etapa do portal.':queued?'Consulta recebida e aguardando o worker.':run.running?finished+' de '+results.length+' consultas concluídas.':found?found+' certidão(ões) localizada(s). Confira o retorno.':'Consultas encerradas sem certidão confirmada.';
+  const summary=waiting?'Uma consulta aguarda uma etapa no Edge.':queued?'Consulta recebida e aguardando o worker.':run.running?finished+' de '+results.length+' consultas concluídas.':found?found+' certidão(ões) localizada(s). Confira o retorno.':'Consultas encerradas sem certidão confirmada.';
   $('#progress-label').textContent=queued?'Na fila':run.running?'Consulta em andamento':'Verificação encerrada';
   $('#run-announcement').textContent=summary;
   $('#results').innerHTML='<p class="status-summary">'+esc(summary)+'</p>'+results.map(r=>{

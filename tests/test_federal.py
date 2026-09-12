@@ -1,4 +1,5 @@
 """Contrato federal e navegação controlada, sem consultar contribuintes reais."""
+import asyncio
 import base64
 import io
 import json
@@ -123,6 +124,21 @@ class NavigationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'],'captcha')
         self.assertNotIn('_pdf',result)
         self.assertEqual(len(self.requests),1)
+
+    async def test_assisted_edge_waits_for_human_retry_and_continues(self):
+        self.captcha=True;updates=[]
+        task=asyncio.create_task(consult_federal(
+            self.adapter,CNPJ,assisted=True,update=lambda **changes:updates.append(changes)
+        ))
+        for _ in range(200):
+            if any(item.get('status')=='aguardando_usuario' for item in updates):break
+            await asyncio.sleep(.1)
+        self.assertTrue(any(item.get('status')=='aguardando_usuario' for item in updates))
+        self.captcha=False
+        await self.context.pages[0].get_by_role('button',name='Emitir Certidão',exact=True).click()
+        result=await asyncio.wait_for(task,15)
+        self.assertEqual(result['status'],'encontrada',result)
+        self.assertEqual([path for _,path in self.requests].count(EMISSION+'/verificar'),2)
 
     async def test_mismatched_pdf_is_never_returned(self):
         self.pdf=pdf_bytes(cnpj='18192898000102')
