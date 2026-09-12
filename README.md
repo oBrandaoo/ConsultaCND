@@ -1,10 +1,10 @@
-# Certifica — CND federal e Santa Rita
+# Certifica — CND federal, FGTS e Santa Rita
 
-Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe o PDF na própria página.
+Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe o PDF na própria página.
 
 ## Prévia gratuita imediata no Windows
 
-O script abaixo publica a aplicação por uma URL HTTPS temporária do `localhost.run`, sem cadastro. Ele inicia o servidor e o túnel como processos ocultos e grava a URL atual em `.runtime/preview-url.txt`:
+O script abaixo publica a aplicação por uma URL HTTPS temporária do `localhost.run`, sem cadastro. Ele inicia o servidor e o túnel como processos ocultos, gera uma senha para a execução e grava a URL atual em `.runtime/preview-url.txt`:
 
 ```powershell
 .\scripts\start-free-preview.cmd
@@ -16,7 +16,7 @@ Para encerrar os dois processos:
 .\scripts\stop-free-preview.cmd
 ```
 
-O computador precisa permanecer ligado e conectado. A URL gratuita muda quando o túnel é reiniciado, tem velocidade limitada e deve ser usada somente para demonstração. A prévia não possui login: qualquer pessoa com o endereço consegue iniciar consultas.
+O computador precisa permanecer ligado e conectado. A URL gratuita muda quando o túnel é reiniciado, tem velocidade limitada e deve ser usada somente para demonstração. O usuário e a senha aparecem no terminal após a inicialização.
 
 ## Executar em um servidor com Docker
 
@@ -56,6 +56,8 @@ A fila aceita até 100 consultas aguardando por padrão. Usar um único worker e
 | `CERTIFICA_BROWSER_MODE` | `server` no container | `server` usa Chromium; `local-edge` usa Edge no Windows. |
 | `CERTIFICA_HEADLESS` | `false` no container | Mantém o navegador completo dentro do Xvfb. |
 | `CERTIFICA_PROFILE_DIR` | `/data/browser-profile` | Perfil técnico persistente do Chromium federal. |
+| `CERTIFICA_LOCAL_EDGE_PROFILE_DIR` | `.runtime/local-edge-profile` | Perfil persistente do Edge usado no modo assistido do Windows. |
+| `CERTIFICA_BASIC_USER` e `CERTIFICA_BASIC_PASSWORD` | vazios | Protegem a aplicação com autenticação HTTP quando definidos juntos. |
 
 O endpoint `GET /healthz` pode ser usado pelo provedor para verificar a saúde do container.
 
@@ -66,7 +68,9 @@ python -m pip install --user -r requirements.txt
 python app.py
 ```
 
-Abra `http://127.0.0.1:8000`. Nesse modo, a consulta federal continua usando o Microsoft Edge local e visível para facilitar diagnóstico. Para reproduzir o servidor, instale o Chromium do Playwright e defina as variáveis correspondentes:
+Abra `http://127.0.0.1:8000`. Nesse modo, a consulta federal usa o Microsoft Edge local com um perfil persistente. Se a Receita exigir validação humana, o painel mostrará “Aguardando você no Edge” por até três minutos. Conclua o desafio e clique novamente no botão indicado; a mesma consulta continuará e o PDF voltará ao painel.
+
+Esse é o modo gratuito recomendado para a operação do contador. Para reproduzir o servidor totalmente oculto, instale o Chromium do Playwright e defina as variáveis correspondentes:
 
 ```powershell
 python -m playwright install chromium
@@ -80,9 +84,14 @@ Se aparecer `No module named 'playwright.async_api'`, instale as dependências u
 ## Consultas
 
 - **Federal:** válida para CNPJs de qualquer cidade. O worker solicita emissão; quando já existe uma certidão válida, obtém a segunda via. O PDF só é entregue após conferir CNPJ, Receita/PGFN, tipo, controle e datas.
+- **FGTS:** consulta o CRF público da Caixa com o CNPJ completo, confirma a declaração de regularidade, o número e a validade e imprime a página oficial em PDF.
 - **Santa Rita do Sapucaí:** usa o fluxo público da prefeitura e confere o PDF municipal antes de entregá-lo.
 
 O portal federal usa hCaptcha invisível. Normalmente ele é resolvido em segundo plano, mas pode recusar a sessão ou apresentar um desafio. A aplicação não tenta contornar essa proteção e não transforma falha de acesso em conclusão fiscal. Uma consulta recusada termina com a causa identificada e pode ser refeita posteriormente.
+
+O portal do FGTS usa uma proteção antifraude que bloqueia navegadores ocultos em algumas redes. No modo gratuito `local-edge`, a consulta usa uma janela normal do Edge com perfil persistente. No Docker, um bloqueio é informado sem concluir que a empresa possui pendências.
+
+No modo `local-edge`, a consulta permanece aberta para o usuário resolver um desafio eventual. No modo `server`, usado pelo Docker, não há interação com a tela virtual; uma recusa do hCaptcha encerra a tentativa com status identificado.
 
 ## Privacidade e operação
 
@@ -99,4 +108,4 @@ python -m unittest discover -s tests -v
 python tests/browser_smoke.py
 ```
 
-Os testes automatizados usam respostas controladas. Os conectores também foram verificados nos portais reais: Santa Rita emitiu e validou o PDF municipal; a consulta federal localizou uma certidão vigente, solicitou a segunda via e validou o PDF retornado.
+Os testes automatizados usam respostas controladas. Os conectores também foram verificados nos portais reais: Santa Rita emitiu e validou o PDF municipal; a consulta federal localizou uma certidão vigente, solicitou a segunda via e validou o PDF retornado; e o FGTS confirmou um CRF vigente da própria Caixa e gerou o PDF validado.

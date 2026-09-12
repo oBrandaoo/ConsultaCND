@@ -13,7 +13,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-COPY app.py consultations.py federal.py santa_rita.py browser_worker.py ./
+COPY app.py consultations.py federal.py fgts.py santa_rita.py browser_worker.py ./
 COPY static ./static
 COPY docs ./docs
 
