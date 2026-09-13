@@ -1,6 +1,6 @@
-# Certifica — CND federal, FGTS, CNDT e Santa Rita
+# Certifica — CND federal, FGTS, CNDT, falência e Santa Rita
 
-Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa, emitir a CNDT trabalhista no TST e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe o PDF na própria página quando o portal libera a emissão.
+Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa, emitir a CNDT trabalhista no TST, solicitar a certidão de falência e concordata no TJMG e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe o PDF na própria página quando o portal libera a emissão.
 
 ## Prévia gratuita imediata no Windows
 
@@ -68,7 +68,7 @@ python -m pip install --user -r requirements.txt
 python app.py
 ```
 
-Abra `http://127.0.0.1:8000`. Nesse modo, as consultas nacionais usam o Microsoft Edge local com um perfil persistente. Se Receita, Caixa ou TST exigirem validação humana, o painel mostrará “Aguardando você no Edge”. Conclua o desafio no portal indicado; a mesma consulta continuará e o PDF voltará ao painel quando a emissão for concluída.
+Abra `http://127.0.0.1:8000`. Nesse modo, as consultas assistidas usam o Microsoft Edge local com um perfil persistente. Se Receita, Caixa, TST ou TJMG exigirem validação humana ou dados complementares, o painel mostrará “Aguardando você no Edge”. Conclua o desafio no portal indicado; a mesma consulta continuará e o PDF voltará ao painel quando a emissão for concluída.
 
 Esse é o modo gratuito recomendado para a operação do contador. Para reproduzir o servidor totalmente oculto, instale o Chromium do Playwright e defina as variáveis correspondentes:
 
@@ -86,6 +86,7 @@ Se aparecer `No module named 'playwright.async_api'`, instale as dependências u
 - **Federal:** válida para CNPJs de qualquer cidade. O worker solicita emissão; quando já existe uma certidão válida, obtém a segunda via. O PDF só é entregue após conferir CNPJ, Receita/PGFN, tipo, controle e datas.
 - **FGTS:** consulta o CRF público da Caixa com o CNPJ completo, confirma a declaração de regularidade, o número e a validade e imprime a página oficial em PDF.
 - **Trabalhista:** abre a emissão pública da CNDT no TST, preenche o CNPJ e aguarda a validação visual quando o portal exige CAPTCHA. O PDF só é entregue após conferir CNPJ, tipo, número e validade.
+- **Falência e concordata:** abre o RUPE/TJMG, tenta selecionar a certidão judicial cível e aguarda o usuário completar comarca, nome exato, dados do solicitante e código de verificação. O PDF só é entregue após conferir CNPJ, tipo, número, comarca e validade.
 - **Santa Rita do Sapucaí:** usa o fluxo público da prefeitura e confere o PDF municipal antes de entregá-lo.
 
 O portal federal usa hCaptcha invisível. Normalmente ele é resolvido em segundo plano, mas pode recusar a sessão ou apresentar um desafio. A aplicação não tenta contornar essa proteção e não transforma falha de acesso em conclusão fiscal. Uma consulta recusada termina com a causa identificada e pode ser refeita posteriormente.
@@ -93,6 +94,8 @@ O portal federal usa hCaptcha invisível. Normalmente ele é resolvido em segund
 O portal do FGTS usa uma proteção antifraude que bloqueia navegadores ocultos em algumas redes. No modo gratuito `local-edge`, a consulta usa uma janela normal do Edge com perfil persistente. No Docker, um bloqueio é informado sem concluir que a empresa possui pendências.
 
 O portal da CNDT trabalhista exige caracteres exibidos em imagem. No modo `local-edge`, a consulta permanece aberta para o usuário digitar a validação e emitir o PDF. No modo `server`, usado pelo Docker, não há interação com a tela virtual; a exigência de CAPTCHA encerra a tentativa com status identificado.
+
+O RUPE/TJMG exige campos que não podem ser inferidos só pelo CNPJ, incluindo comarca, nome exatamente igual ao cadastro pesquisado, dados do solicitante e código de verificação. A aplicação não armazena esses dados e não conclui a certidão sem PDF validado.
 
 ## Privacidade e operação
 
@@ -109,4 +112,4 @@ python -m unittest discover -s tests -v
 python tests/browser_smoke.py
 ```
 
-Os testes automatizados usam respostas controladas. Os conectores também foram verificados nos portais reais: Santa Rita emitiu e validou o PDF municipal; a consulta federal localizou uma certidão vigente, solicitou a segunda via e validou o PDF retornado; e o FGTS confirmou um CRF vigente da própria Caixa e gerou o PDF validado. A CNDT trabalhista possui cobertura automatizada simulada e depende de validação visual do TST em uso real.
+Os testes automatizados usam respostas controladas. Os conectores também foram verificados nos portais reais: Santa Rita emitiu e validou o PDF municipal; a consulta federal localizou uma certidão vigente, solicitou a segunda via e validou o PDF retornado; e o FGTS confirmou um CRF vigente da própria Caixa e gerou o PDF validado. A CNDT trabalhista e a certidão de falência/concordata possuem cobertura automatizada simulada e dependem de validação visual em uso real.
