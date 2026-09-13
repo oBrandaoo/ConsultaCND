@@ -2,7 +2,7 @@
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatCnpj=v=>v.replace(/^(.{2})(.{3})(.{3})(.{4})(.{2})$/,'$1.$2.$3/$4-$5');
-const shorts={federal:'RF',fgts:'FG',trabalhista:'JT',municipal:'SR'};
+const shorts={federal:'RF',fgts:'FG',trabalhista:'JT',falencia:'TJ',municipal:'SR'};
 let config,run,pollTimer,toastTimer,pollFailures=0;
 const pending=s=>['aguardando','consultando','aguardando_usuario'].includes(s);
 const tone=s=>s==='encontrada'?'good':['bloqueado','indisponivel'].includes(s)?'bad':['login','captcha','manual','sem_certidao'].includes(s)?'warning':s==='consultando'?'info':'';

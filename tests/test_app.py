@@ -55,13 +55,14 @@ class ClassificationTest(unittest.TestCase):
         result=assess_page('federal',CNPJ,'Entrar com gov.br\nNão foram encontradas certidões.',URL,True)
         self.assertEqual(result['status'],'sem_certidao')
 
-    def test_federal_fgts_trabalhista_and_santa_rita_are_available_without_city_selector(self):
+    def test_federal_fgts_trabalhista_falencia_and_santa_rita_are_available_without_city_selector(self):
         config=Consultations(lambda _:None).config()
-        self.assertEqual(list(config['services']),['federal','fgts','trabalhista','municipal'])
+        self.assertEqual(list(config['services']),['federal','fgts','trabalhista','falencia','municipal'])
         self.assertNotIn('cities',config)
         self.assertIn('receitafederal',portal_url('federal',None))
         self.assertIn('consulta-crf.caixa.gov.br',portal_url('fgts',None))
         self.assertIn('cndt-certidao.tst.jus.br',portal_url('trabalhista',None))
+        self.assertIn('rupe.tjmg.jus.br',portal_url('falencia',None))
         self.assertIn('santaritasapucai',portal_url('municipal',None))
 
 class EngineTest(unittest.TestCase):
@@ -177,7 +178,7 @@ class HttpTest(unittest.TestCase):
         self.assertEqual(status,400)
         self.assertIn('Santa Rita',json.loads(body)['error'])
         config=json.loads(self.request('/api/config')[1])
-        self.assertEqual(list(config['services']),['federal','fgts','trabalhista','municipal'])
+        self.assertEqual(list(config['services']),['federal','fgts','trabalhista','falencia','municipal'])
         self.assertNotIn('cities',config)
 
     def test_santa_rita_pdf_download_matches_query(self):
@@ -245,6 +246,23 @@ class HttpTest(unittest.TestCase):
         with urllib.request.urlopen(self.base+result['document_url']) as response:
             self.assertEqual(response.headers['Content-Type'],'application/pdf')
             self.assertIn('cndt-trabalhista-',response.headers['Content-Disposition'])
+            self.assertEqual(response.read(),content)
+
+    def test_falencia_pdf_download_matches_query(self):
+        content=b'%PDF-1.7\nFalencia controlled test\n%%EOF'
+        async def runner(rid):
+            self.engine.update(rid,'falencia',status='encontrada',message='Falencia e concordata de teste.',_pdf=content)
+        self.engine.runner=runner
+        status,body=self.request('/api/consultations',{'cnpj':CNPJ,'services':['falencia']})
+        self.assertEqual(status,202)
+        rid=json.loads(body)['id']
+        deadline=time.monotonic()+3
+        while self.engine.get(rid)['running'] and time.monotonic()<deadline:time.sleep(.01)
+        result=json.loads(self.request('/api/consultations/'+rid)[1])['results']['falencia']
+        self.assertIn('/documents/falencia',result['document_url'])
+        with urllib.request.urlopen(self.base+result['document_url']) as response:
+            self.assertEqual(response.headers['Content-Type'],'application/pdf')
+            self.assertIn('cnd-falencia-concordata-',response.headers['Content-Disposition'])
             self.assertEqual(response.read(),content)
 
 if __name__=='__main__': unittest.main()
