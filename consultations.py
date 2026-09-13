@@ -21,6 +21,7 @@ SERVICES = {
     'federal': {'label':'CND federal', 'issuer':'Receita Federal / PGFN', 'url':'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj', 'mode':'Nacional · emissão ou segunda via automática com PDF'},
     'fgts': {'label':'CRF do FGTS', 'issuer':'Caixa Econômica Federal', 'url':'https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf', 'mode':'Nacional · consulta pública automática com PDF'},
     'trabalhista': {'label':'CNDT trabalhista', 'issuer':'Tribunal Superior do Trabalho', 'url':'https://cndt-certidao.tst.jus.br/gerarCertidao', 'mode':'Nacional · emissão assistida com PDF'},
+    'falencia': {'label':'CND falência e concordata', 'issuer':'Tribunal de Justiça de Minas Gerais', 'url':'https://rupe.tjmg.jus.br/rupe/justica/publico/certidoes/criarSolicitacaoCertidao.rupe?solicitacaoPublica=true', 'mode':'Minas Gerais · solicitação assistida com PDF'},
     'municipal': {'label':'CND municipal', 'issuer':'Prefeitura de Santa Rita do Sapucaí', 'url':'https://servicoswebsantaritasapucai.sgpcloud.net:8443/servicosweb/home.jsf', 'mode':'Santa Rita do Sapucaí · automática com PDF'},
 }
 STATUS = {'aguardando':'Aguardando','consultando':'Consultando','encontrada':'Certidão localizada',
@@ -111,7 +112,10 @@ async def run_portal(browser,service,cnpj,city,assisted=False,update=None):
     if service=='trabalhista':
         from trabalhista import consult_trabalhista
         return await consult_trabalhista(browser,cnpj,assisted,update)
-    raise ValidationError('Esta versão consulta somente a CND federal, o CRF do FGTS, a CNDT trabalhista ou a municipal de Santa Rita.')
+    if service=='falencia':
+        from falencia import consult_falencia
+        return await consult_falencia(browser,cnpj,assisted,update)
+    raise ValidationError('Esta versão consulta somente a CND federal, o CRF do FGTS, a CNDT trabalhista, a CND de falência/concordata ou a municipal de Santa Rita.')
 
 class Consultations:
     def __init__(self,runner=None,max_queue=None):
@@ -139,10 +143,16 @@ class Consultations:
         if (not isinstance(services,list) or not services or len(services)>len(SERVICES) or
                 any(not isinstance(service,str) or service not in SERVICES for service in services) or
                 len(set(services))!=len(services)):
-            raise ValidationError('Selecione a CND federal, o CRF do FGTS, a CNDT trabalhista ou a municipal de Santa Rita, sem repetições.')
+            raise ValidationError('Selecione a CND federal, o CRF do FGTS, a CNDT trabalhista, a CND de falência/concordata ou a municipal de Santa Rita, sem repetições.')
         from browser_worker import browser_mode
-        assisted=bool({'federal','fgts','trabalhista'} & set(services)) and browser_mode()=='local-edge'
-        scope=('Brasil + Santa Rita do Sapucaí · MG' if 'municipal' in services and len(services)>1 else
+        selected=set(services)
+        assisted=bool({'federal','fgts','trabalhista','falencia'} & selected) and browser_mode()=='local-edge'
+        national=bool({'federal','fgts','trabalhista'} & selected)
+        scope=('Brasil + Minas Gerais + Santa Rita do Sapucaí · MG' if national and {'falencia','municipal'} <= selected else
+               'Minas Gerais + Santa Rita do Sapucaí · MG' if {'falencia','municipal'} <= selected else
+               'Brasil + Minas Gerais' if national and 'falencia' in selected else
+               'Minas Gerais' if services==['falencia'] else
+               'Brasil + Santa Rita do Sapucaí · MG' if 'municipal' in selected and len(services)>1 else
                'Santa Rita do Sapucaí · MG' if services==['municipal'] else 'Brasil')
         with self.lock:
             self._expire()
@@ -203,7 +213,7 @@ class Consultations:
             result=run['results'].get(service) if run else None
             if service not in SERVICES or not result or result['status']!='encontrada' or not result.get('_pdf'):
                 raise ValidationError('PDF não encontrado ou expirado. Inicie uma nova consulta.')
-            prefix={'federal':'cnd-federal','fgts':'crf-fgts','trabalhista':'cndt-trabalhista','municipal':'cnd-santa-rita'}[service]
+            prefix={'federal':'cnd-federal','fgts':'crf-fgts','trabalhista':'cndt-trabalhista','falencia':'cnd-falencia-concordata','municipal':'cnd-santa-rita'}[service]
             return result['_pdf'],f'{prefix}-{run["cnpj"]}.pdf'
 
     def _execute(self,rid):
@@ -231,11 +241,11 @@ class Consultations:
             async def consult(service):
                 browser=process=profile=None
                 try:
-                    if service in ('federal','fgts','trabalhista'):
+                    if service in ('federal','fgts','trabalhista','falencia'):
                         from browser_worker import browser_mode,launch_federal_browser
                         browser,process,profile=await launch_federal_browser(p)
                         assisted=browser_mode()=='local-edge'
-                        issuer={'federal':'Receita','fgts':'Caixa','trabalhista':'TST'}[service]
+                        issuer={'federal':'Receita','fgts':'Caixa','trabalhista':'TST','falencia':'TJMG'}[service]
                         message=(f'Acessando o portal oficial da {issuer} no Edge deste computador…' if assisted else
                                  f'Acessando o portal oficial da {issuer} no navegador do servidor…')
                     else:

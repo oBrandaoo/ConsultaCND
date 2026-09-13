@@ -84,7 +84,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.require_authentication():return
         if path=='/api/config':
             return self.send_data(200,{**self.server.consultations.config(),'token':self.server.token})
-        document=re.fullmatch(r'/api/consultations/([A-Za-z0-9_-]+)/documents/(federal|fgts|trabalhista|municipal)',path)
+        document=re.fullmatch(r'/api/consultations/([A-Za-z0-9_-]+)/documents/(federal|fgts|trabalhista|falencia|municipal)',path)
         if document:
             try:
                 content,filename=self.server.consultations.get_document(document[1],document[2])
