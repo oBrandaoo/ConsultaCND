@@ -1,6 +1,6 @@
-# Certifica — CND federal, FGTS e Santa Rita
+# Certifica — CND federal, FGTS, CNDT e Santa Rita
 
-Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe o PDF na própria página.
+Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa, emitir a CNDT trabalhista no TST e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe o PDF na própria página quando o portal libera a emissão.
 
 ## Prévia gratuita imediata no Windows
 
@@ -55,7 +55,7 @@ A fila aceita até 100 consultas aguardando por padrão. Usar um único worker e
 | `CERTIFICA_MAX_QUEUE` | `100` | Consultas aguardando; aceita de 1 a 500. |
 | `CERTIFICA_BROWSER_MODE` | `server` no container | `server` usa Chromium; `local-edge` usa Edge no Windows. |
 | `CERTIFICA_HEADLESS` | `false` no container | Mantém o navegador completo dentro do Xvfb. |
-| `CERTIFICA_PROFILE_DIR` | `/data/browser-profile` | Perfil técnico persistente do Chromium federal. |
+| `CERTIFICA_PROFILE_DIR` | `/data/browser-profile` | Perfil técnico persistente do Chromium nacional. |
 | `CERTIFICA_LOCAL_EDGE_PROFILE_DIR` | `.runtime/local-edge-profile` | Perfil persistente do Edge usado no modo assistido do Windows. |
 | `CERTIFICA_BASIC_USER` e `CERTIFICA_BASIC_PASSWORD` | vazios | Protegem a aplicação com autenticação HTTP quando definidos juntos. |
 
@@ -68,7 +68,7 @@ python -m pip install --user -r requirements.txt
 python app.py
 ```
 
-Abra `http://127.0.0.1:8000`. Nesse modo, a consulta federal usa o Microsoft Edge local com um perfil persistente. Se a Receita exigir validação humana, o painel mostrará “Aguardando você no Edge” por até três minutos. Conclua o desafio e clique novamente no botão indicado; a mesma consulta continuará e o PDF voltará ao painel.
+Abra `http://127.0.0.1:8000`. Nesse modo, as consultas nacionais usam o Microsoft Edge local com um perfil persistente. Se Receita, Caixa ou TST exigirem validação humana, o painel mostrará “Aguardando você no Edge”. Conclua o desafio no portal indicado; a mesma consulta continuará e o PDF voltará ao painel quando a emissão for concluída.
 
 Esse é o modo gratuito recomendado para a operação do contador. Para reproduzir o servidor totalmente oculto, instale o Chromium do Playwright e defina as variáveis correspondentes:
 
@@ -85,13 +85,14 @@ Se aparecer `No module named 'playwright.async_api'`, instale as dependências u
 
 - **Federal:** válida para CNPJs de qualquer cidade. O worker solicita emissão; quando já existe uma certidão válida, obtém a segunda via. O PDF só é entregue após conferir CNPJ, Receita/PGFN, tipo, controle e datas.
 - **FGTS:** consulta o CRF público da Caixa com o CNPJ completo, confirma a declaração de regularidade, o número e a validade e imprime a página oficial em PDF.
+- **Trabalhista:** abre a emissão pública da CNDT no TST, preenche o CNPJ e aguarda a validação visual quando o portal exige CAPTCHA. O PDF só é entregue após conferir CNPJ, tipo, número e validade.
 - **Santa Rita do Sapucaí:** usa o fluxo público da prefeitura e confere o PDF municipal antes de entregá-lo.
 
 O portal federal usa hCaptcha invisível. Normalmente ele é resolvido em segundo plano, mas pode recusar a sessão ou apresentar um desafio. A aplicação não tenta contornar essa proteção e não transforma falha de acesso em conclusão fiscal. Uma consulta recusada termina com a causa identificada e pode ser refeita posteriormente.
 
 O portal do FGTS usa uma proteção antifraude que bloqueia navegadores ocultos em algumas redes. No modo gratuito `local-edge`, a consulta usa uma janela normal do Edge com perfil persistente. No Docker, um bloqueio é informado sem concluir que a empresa possui pendências.
 
-No modo `local-edge`, a consulta permanece aberta para o usuário resolver um desafio eventual. No modo `server`, usado pelo Docker, não há interação com a tela virtual; uma recusa do hCaptcha encerra a tentativa com status identificado.
+O portal da CNDT trabalhista exige caracteres exibidos em imagem. No modo `local-edge`, a consulta permanece aberta para o usuário digitar a validação e emitir o PDF. No modo `server`, usado pelo Docker, não há interação com a tela virtual; a exigência de CAPTCHA encerra a tentativa com status identificado.
 
 ## Privacidade e operação
 
@@ -108,4 +109,4 @@ python -m unittest discover -s tests -v
 python tests/browser_smoke.py
 ```
 
-Os testes automatizados usam respostas controladas. Os conectores também foram verificados nos portais reais: Santa Rita emitiu e validou o PDF municipal; a consulta federal localizou uma certidão vigente, solicitou a segunda via e validou o PDF retornado; e o FGTS confirmou um CRF vigente da própria Caixa e gerou o PDF validado.
+Os testes automatizados usam respostas controladas. Os conectores também foram verificados nos portais reais: Santa Rita emitiu e validou o PDF municipal; a consulta federal localizou uma certidão vigente, solicitou a segunda via e validou o PDF retornado; e o FGTS confirmou um CRF vigente da própria Caixa e gerou o PDF validado. A CNDT trabalhista possui cobertura automatizada simulada e depende de validação visual do TST em uso real.
