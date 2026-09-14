@@ -94,6 +94,7 @@ def main():
             assert page.locator('.evidence script').count()==0
             expect(page.locator('.query-summary')).to_contain_text('Brasil + Minas Gerais + São Paulo + Santa Rita do Sapucaí')
             expect(page.get_by_role('link',name='Baixar certidão em PDF')).to_have_count(7)
+            expect(page.locator('.pdf-preview iframe')).to_have_count(7)
             page.screenshot(path=str(artifacts/'consulta-federal-resultado.png'),full_page=True)
 
             page.reload()
