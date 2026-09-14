@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 HOST = 'www10.fazenda.sp.gov.br'
 URL = f'https://{HOST}/CertidaoNegativaDeb/Pages/EmissaoCertidaoNegativa.aspx'
 MAX_PDF = 5 * 1024 * 1024
+HUMAN_CAPTCHA_TIMEOUT = 180
 
 
 class SPCndError(Exception):
@@ -143,6 +144,11 @@ def pending_result(text, submitted=False):
     return outcome(status, messages[status], evidence, submitted=submitted, searched=submitted, stage='resultado')
 
 
+def captcha_wait_message():
+    return ('A Sefaz/SP pediu validacao humana. Preencha o CAPTCHA na janela do Edge, '
+            'clique em emitir/consultar e aguarde; a consulta continuara automaticamente.')
+
+
 async def body_text(page):
     try:
         return await page.locator('body').inner_text(timeout=2000)
@@ -169,6 +175,21 @@ async def find_cnpj_field(page):
     raise SPCndError('O formulario da eCND estadual de SP nao ficou disponivel no prazo.', 'manual')
 
 
+async def wait_for_captcha_to_clear(page, timeout=HUMAN_CAPTCHA_TIMEOUT):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = await body_text(page)
+        blocked = is_blocked_or_manual(text)
+        if not blocked:
+            return
+        if blocked != 'captcha':
+            result = pending_result(text)
+            raise SPCndError(str(result['message']), result['status'], result['evidence'])
+        await page.wait_for_timeout(500)
+    raise SPCndError('O CAPTCHA da eCND estadual de SP nao foi concluido no Edge dentro de 3 minutos.',
+                     'captcha', 'Aguardando validacao humana da Sefaz/SP.')
+
+
 async def click_emit(page):
     pattern = re.compile('Emitir(?: certidao)?|Gerar(?: certidao)?|Consultar(?: certidao)?', re.I)
     candidates = [
@@ -183,12 +204,15 @@ async def click_emit(page):
     return False
 
 
-async def wait_for_certificate(page, cnpj, downloads=None, responses=None, popups=None, timeout=45):
+async def wait_for_certificate(page, cnpj, downloads=None, responses=None, popups=None,
+                               timeout=45, assisted=False, update=None):
     deadline = time.monotonic() + timeout
     downloads = downloads if downloads is not None else []
     responses = responses if responses is not None else []
     popups = popups if popups is not None else []
     pdf_errors = []
+    captcha_seen = False
+    captcha_evidence = None
     while time.monotonic() < deadline:
         while downloads:
             try:
@@ -216,14 +240,27 @@ async def wait_for_certificate(page, cnpj, downloads=None, responses=None, popup
                 certificate = parse_sp_pdf(content, cnpj, certificate['control'])
                 return certificate, content
             if is_blocked_or_manual(text):
-                raise SPCndError(str(pending_result(text)['message']), pending_result(text)['status'],
-                                 pending_result(text)['evidence'])
+                blocked = pending_result(text)
+                if assisted and blocked['status'] == 'captcha':
+                    evidence = blocked.get('evidence', '')
+                    if update and (not captcha_seen or evidence != captcha_evidence):
+                        update(status='aguardando_usuario', message=captcha_wait_message(),
+                               evidence=evidence, submitted=True,
+                               searched=False, stage='captcha')
+                    captcha_seen = True
+                    captcha_evidence = evidence
+                else:
+                    raise SPCndError(str(blocked['message']), blocked['status'], blocked['evidence'])
         await page.wait_for_timeout(500)
+    if captcha_seen:
+        raise SPCndError('O CAPTCHA da eCND estadual de SP nao foi concluido no Edge dentro de 3 minutos.',
+                         'captcha', 'Aguardando validacao humana da Sefaz/SP.')
     raise SPCndError('A Sefaz/SP nao concluiu a emissao da eCND estadual no prazo.', 'indisponivel',
                      '; '.join(pdf_errors[-2:]))
 
 
-async def consult_estadual_sp(browser, cnpj, assisted=False, update=None):
+async def consult_estadual_sp(browser, cnpj, assisted=False, update=None,
+                              captcha_timeout=HUMAN_CAPTCHA_TIMEOUT):
     contexts = getattr(browser, 'contexts', [])
     if contexts:
         context = contexts[0]
@@ -268,11 +305,29 @@ async def consult_estadual_sp(browser, cnpj, assisted=False, update=None):
                              'bloqueado' if response.status in (401, 403, 429) else 'indisponivel',
                              f'HTTP {response.status}')
         text = await body_text(page)
-        if is_blocked_or_manual(text):
-            return pending_result(text)
+        field = None
+        blocked_status = is_blocked_or_manual(text)
+        if blocked_status:
+            if blocked_status == 'captcha':
+                try:
+                    field = await find_cnpj_field(page)
+                except SPCndError:
+                    field = None
+            if field is None:
+                blocked = pending_result(text)
+                if not (assisted and blocked['status'] == 'captcha'):
+                    return blocked
+                stage = 'captcha'
+                if update:
+                    update(status='aguardando_usuario', message=captcha_wait_message(),
+                           evidence=blocked.get('evidence', ''), submitted=False,
+                           searched=False, stage=stage)
+                await wait_for_captcha_to_clear(page, captcha_timeout)
+                progress('Validacao concluida. Preenchendo o CNPJ no portal estadual de SP...', evidence='')
         stage = 'formulario'
         progress('Preenchendo o CNPJ no portal estadual de SP...', evidence='')
-        field = await find_cnpj_field(page)
+        if field is None:
+            field = await find_cnpj_field(page)
         await field.fill(cnpj)
         if cnpj not in compact_cnpj(await field.input_value()):
             raise SPCndError('Nao foi possivel preencher o CNPJ no portal estadual de SP.')
@@ -280,7 +335,8 @@ async def consult_estadual_sp(browser, cnpj, assisted=False, update=None):
         if not submitted:
             raise SPCndError('Nao foi localizado o botao de emissao da eCND estadual de SP.')
         certificate, content = await wait_for_certificate(
-            page, cnpj, downloads, responses, popups
+            page, cnpj, downloads, responses, popups,
+            timeout=captcha_timeout if assisted else 45, assisted=assisted, update=update
         )
         evidence = (
             f"{certificate['type']}\n"

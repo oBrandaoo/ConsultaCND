@@ -23,7 +23,7 @@ SERVICES = {
     'trabalhista': {'label':'CNDT trabalhista', 'issuer':'Tribunal Superior do Trabalho', 'url':'https://cndt-certidao.tst.jus.br/gerarCertidao', 'mode':'Nacional · automática; CAPTCHA pode ser concluído no Edge local'},
     'falencia': {'label':'CND falência e concordata', 'issuer':'Tribunal de Justiça de Minas Gerais', 'url':'https://rupe.tjmg.jus.br/rupe/justica/publico/certidoes/criarSolicitacaoCertidao.rupe?solicitacaoPublica=true', 'mode':'Minas Gerais · tentativa automática em Chromium, sem Edge'},
     'estadual_mg': {'label':'CDT estadual MG', 'issuer':'Secretaria de Estado de Fazenda de Minas Gerais', 'url':'https://www2.fazenda.mg.gov.br/sol/', 'mode':'Minas Gerais · tentativa automática em Chromium, sem Edge'},
-    'estadual_sp': {'label':'CND estadual SP', 'issuer':'Secretaria da Fazenda e Planejamento de São Paulo', 'url':'https://www10.fazenda.sp.gov.br/CertidaoNegativaDeb/Pages/EmissaoCertidaoNegativa.aspx', 'mode':'São Paulo · eCND não inscritos em Chromium, sem Edge'},
+    'estadual_sp': {'label':'CND estadual SP', 'issuer':'Secretaria da Fazenda e Planejamento de São Paulo', 'url':'https://www10.fazenda.sp.gov.br/CertidaoNegativaDeb/Pages/EmissaoCertidaoNegativa.aspx', 'mode':'São Paulo · eCND não inscritos; CAPTCHA pode ser concluído no Edge local'},
     'municipal': {'label':'CND municipal', 'issuer':'Prefeitura de Santa Rita do Sapucaí', 'url':'https://servicoswebsantaritasapucai.sgpcloud.net:8443/servicosweb/home.jsf', 'mode':'Santa Rita do Sapucaí · automática com PDF'},
 }
 STATUS = {'aguardando':'Aguardando','consultando':'Consultando','encontrada':'Certidão localizada',
@@ -155,7 +155,7 @@ class Consultations:
         from browser_worker import browser_mode
         selected=set(services)
         falencia_inputs=self._validate_falencia_inputs(data.get('falencia'), 'falencia' in selected)
-        assisted=bool({'federal','fgts','trabalhista'} & selected) and browser_mode()=='local-edge'
+        assisted=bool({'federal','fgts','trabalhista','estadual_sp'} & selected) and browser_mode()=='local-edge'
         scope_parts=[]
         if {'federal','fgts','trabalhista'} & selected:
             scope_parts.append('Brasil')
@@ -281,11 +281,11 @@ class Consultations:
                 browser=process=profile=None
                 try:
                     from browser_worker import browser_mode
-                    if service in ('federal','fgts') or (service=='trabalhista' and browser_mode()=='local-edge'):
+                    if service in ('federal','fgts') or (service in ('trabalhista','estadual_sp') and browser_mode()=='local-edge'):
                         from browser_worker import launch_federal_browser
                         browser,process,profile=await launch_federal_browser(p)
                         assisted=browser_mode()=='local-edge'
-                        issuer={'federal':'Receita','fgts':'Caixa','trabalhista':'TST'}[service]
+                        issuer={'federal':'Receita','fgts':'Caixa','trabalhista':'TST','estadual_sp':'Sefaz/SP'}[service]
                         article='do' if service=='trabalhista' else 'da'
                         message=(f'Acessando o portal oficial {article} {issuer} no Edge deste computador…' if assisted else
                                  f'Acessando o portal oficial {article} {issuer} no navegador do servidor…')
