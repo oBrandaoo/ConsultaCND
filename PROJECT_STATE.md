@@ -23,6 +23,54 @@
 - Validar manualmente a CNDT real em Windows `local-edge`: o TST deve abrir no Edge, pedir os caracteres, continuar apos o operador clicar em emitir e liberar o PDF somente apos validacao.
 - Validar manualmente a CNDT real em modo `server`: se o TST exigir CAPTCHA, a tentativa deve encerrar com status `captcha`, sem abrir Edge e sem PDF.
 
+## Atualizacao - 2026-09-14 - Estadual SP
+
+### Concluido
+
+- Melhorado o fluxo da eCND estadual SP para assistencia humana no CAPTCHA quando o projeto roda em `local-edge`.
+- `consultations.py` agora considera `estadual_sp` no modo assistido local e abre a Sefaz/SP no Edge do computador; em modo `server`, SP continua no Chromium do servidor.
+- `estadual_sp.py` agora publica `aguardando_usuario` quando a Sefaz/SP pede CAPTCHA, mantem a pagina aberta por ate 180 segundos, aguarda o operador preencher a validacao e clicar em emitir/consultar, e depois captura/valida o PDF gerado.
+- Se o formulario inicial ja exibir campo de CNPJ junto com texto de CAPTCHA, o conector preenche o CNPJ e envia antes de aguardar a etapa humana.
+- Pendencias de e-CNPJ, e-CPF, SIPET, login/certificado ou PGE/SP continuam sendo retornadas como `login`/`manual`, sem tentativa de contornar autenticacao.
+- `tests/test_estadual.py` recebeu cobertura simulada para SP assistido: espera humana, retomada com PDF, nova tentativa apos CAPTCHA invalido, timeout sem PDF e CAPTCHA presente no formulario inicial.
+- `README.md` e `docs/escopo.md` documentam a diferenca entre o modo Windows `local-edge` assistido e o modo servidor/Docker para SP.
+- Reader mapeou o fluxo existente; Writer criou testes simulados; Reviewer apontou o risco do CAPTCHA inicial com campo CNPJ e a classificacao de bloqueios nao-CAPTCHA, ambos corrigidos.
+
+### Validacao
+
+- `git diff --check` executou sem erros; houve apenas avisos esperados de LF/CRLF.
+- `python -m unittest discover -s tests -v`, `python tests/browser_smoke.py` e `py -3 -m unittest discover -s tests -v` nao puderam rodar porque `python` e `py` nao estao no PATH desta sessao.
+- `docker compose config` nao pode rodar porque `docker` nao esta no PATH desta sessao.
+
+### Pendente
+
+- Rodar a suite automatizada em ambiente com Python/Playwright disponivel.
+- Validar manualmente a eCND estadual SP real em Windows `local-edge`: a Sefaz/SP deve abrir no Edge, permitir preenchimento humano do CAPTCHA, continuar apos o operador clicar em emitir/consultar e liberar o PDF somente apos validacao.
+- Validar manualmente a eCND estadual SP real em modo `server`: se a Sefaz/SP exigir CAPTCHA, login/certificado, e-CNPJ/e-CPF, SIPET ou PGE/SP, a tentativa deve encerrar com status identificado, sem PDF.
+
+## Atualizacao - 2026-09-14 - Previa PDF no site
+
+### Concluido
+
+- Confirmado com Reader que todos os conectores atuais ja retornam PDF validado quando a certidao e obtida: Federal e Santa Rita capturam PDF oficial; FGTS, CNDT, falencia/concordata e estaduais MG/SP imprimem a pagina/popup HTML com `page.pdf()` quando necessario e revalidam o PDF.
+- `static/app.js` agora exibe uma previa embutida do PDF para qualquer resultado `encontrada` com `document_url`, mantendo o botao de download.
+- `static/styles.css` recebeu estilos responsivos para a previa PDF em desktop e mobile.
+- `tests/browser_smoke.py` foi ampliado para verificar que sete certidoes simuladas encontradas exibem sete iframes de previa PDF.
+- `README.md` e `docs/escopo.md` documentam que a certidao validada aparece na propria pagina e tambem fica disponivel para download.
+- Writer mapeou a cobertura existente de PDF/captura; Reviewer revisou XSS, gating por `document_url`, download e layout responsivo sem findings bloqueantes.
+
+### Validacao
+
+- `git diff --check` executou sem erros; houve apenas avisos esperados de LF/CRLF.
+- `node --check static/app.js` executou com sucesso apos permissao fora do sandbox; a tentativa no sandbox falhou por `EPERM` ao resolver o caminho do OneDrive.
+- `python -m unittest discover -s tests -v`, `python tests/browser_smoke.py` e `py -3 -m unittest discover -s tests -v` nao puderam rodar porque `python` e `py` nao estao no PATH desta sessao.
+- `docker compose config` e `docker compose build` nao puderam rodar porque `docker` nao esta no PATH desta sessao.
+
+### Pendente
+
+- Rodar a suite automatizada e o smoke test em ambiente com Python/Playwright disponivel.
+- Validar visualmente em navegador real que a previa embutida abre os PDFs dos sete servicos sem quebrar o layout mobile.
+
 ## Concluido
 
 - Implementada a integracao da CNDT trabalhista como servico `trabalhista`.

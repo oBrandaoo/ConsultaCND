@@ -1,6 +1,6 @@
 # Certifica — CND federal, FGTS, CNDT, estaduais MG/SP e Santa Rita
 
-Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa, emitir a CNDT trabalhista no TST, solicitar a certidão de falência e concordata no TJMG, emitir CNDs estaduais de MG/SP e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe o PDF na própria página quando o portal libera a emissão.
+Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa, emitir a CNDT trabalhista no TST, solicitar a certidão de falência e concordata no TJMG, emitir CNDs estaduais de MG/SP e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe a prévia do PDF na própria página, com opção de download, quando o portal libera a emissão.
 
 ## Prévia gratuita imediata no Windows
 
@@ -41,7 +41,7 @@ Em produção, publique a porta 8000 atrás de um proxy HTTPS e restrinja o aces
 2. A API valida os dados e adiciona a consulta à fila em memória.
 3. Um único worker processa as consultas na ordem recebida.
 4. O worker abre Chromium no servidor e executa o formulário oficial.
-5. O PDF recebido é conferido antes de ser liberado.
+5. O PDF recebido ou impresso pelo navegador é conferido antes de ser liberado.
 6. Resultado e PDF ficam em memória por 30 minutos e desaparecem ao reiniciar o container.
 
 A fila aceita até 100 consultas aguardando por padrão. Usar um único worker evita várias emissões simultâneas contra os portais. Esta versão deve rodar como uma única instância; filas e resultados não são compartilhados entre réplicas.
@@ -68,7 +68,7 @@ python -m pip install --user -r requirements.txt
 python app.py
 ```
 
-Abra `http://127.0.0.1:8000`. Nesse modo, Receita, Caixa e CNDT trabalhista podem usar o Microsoft Edge local com um perfil persistente. Se o TST pedir os caracteres da imagem, a consulta fica aguardando o operador preencher o CAPTCHA na janela do Edge e clicar em emitir; depois disso, a ferramenta tenta capturar e validar o PDF automaticamente. Falência/concordata e estaduais MG/SP rodam no Chromium do servidor, sem abrir Edge; se TJMG, SEF/MG ou Sefaz/SP exigirem código de verificação, login/certificado ou dados que não foram informados, a tentativa termina com status identificado e link para o portal.
+Abra `http://127.0.0.1:8000`. Nesse modo, Receita, Caixa, CNDT trabalhista e eCND estadual SP podem usar o Microsoft Edge local com um perfil persistente. Se o TST ou a Sefaz/SP pedirem caracteres de imagem, a consulta fica aguardando o operador preencher o CAPTCHA na janela do Edge e clicar em emitir/consultar; depois disso, a ferramenta tenta capturar e validar o PDF automaticamente. Falência/concordata e estadual MG rodam no Chromium do servidor, sem abrir Edge; se TJMG, SEF/MG ou Sefaz/SP exigirem código de verificação, login/certificado ou dados que não foram informados, a tentativa termina com status identificado e link para o portal.
 
 Esse é o modo gratuito recomendado para a operação do contador. Para reproduzir o servidor totalmente oculto, instale o Chromium do Playwright e defina as variáveis correspondentes:
 
@@ -88,7 +88,7 @@ Se aparecer `No module named 'playwright.async_api'`, instale as dependências u
 - **Trabalhista:** abre a emissão pública da CNDT no TST, preenche o CNPJ e tenta emitir automaticamente. No Windows em `local-edge`, se o portal exigir CAPTCHA, a consulta aguarda a digitação humana dos caracteres na janela do Edge e continua após o operador clicar em emitir. No Docker/servidor, onde não há janela interativa para o usuário, o CAPTCHA encerra a tentativa com status identificado. O PDF só é entregue após conferir CNPJ, tipo, número e validade.
 - **Falência e concordata:** abre o RUPE/TJMG no Chromium do servidor, usa os dados judiciais informados no formulário e tenta solicitar a certidão cível. Se faltarem comarca, nome exato, dados do solicitante ou código de verificação, a consulta termina sem abrir Edge. O PDF só é entregue após conferir CNPJ, tipo, número, comarca e validade.
 - **Estadual MG:** tenta emitir a CDT pública da SEF/MG no Chromium do servidor e entrega o PDF somente após conferir CNPJ, órgão emissor, declaração, número e validade. Quando a SEF/MG exige SIARE, login ou certificado, o status informa a pendência sem abrir Edge.
-- **Estadual SP:** tenta emitir a eCND de débitos tributários não inscritos da Sefaz/SP no Chromium do servidor e entrega o PDF somente após conferir CNPJ, órgão emissor, declaração, número e validade. Pendências que exigem e-CNPJ, e-CPF, SIPET ou atendimento pela PGE ficam sinalizadas como login/manual.
+- **Estadual SP:** tenta emitir a eCND de débitos tributários não inscritos da Sefaz/SP e entrega o PDF somente após conferir CNPJ, órgão emissor, declaração, número e validade. No Windows em `local-edge`, se a Sefaz/SP exigir CAPTCHA, a consulta aguarda a digitação humana no Edge e continua após o operador clicar em emitir/consultar. Pendências que exigem e-CNPJ, e-CPF, SIPET ou atendimento pela PGE ficam sinalizadas como login/manual.
 - **Santa Rita do Sapucaí:** usa o fluxo público da prefeitura e confere o PDF municipal antes de entregá-lo.
 
 O portal federal usa hCaptcha invisível. Normalmente ele é resolvido em segundo plano, mas pode recusar a sessão ou apresentar um desafio. A aplicação não tenta contornar essa proteção e não transforma falha de acesso em conclusão fiscal. Uma consulta recusada termina com a causa identificada e pode ser refeita posteriormente.
@@ -99,7 +99,7 @@ O portal da CNDT trabalhista pode exigir caracteres exibidos em imagem. A aplica
 
 O RUPE/TJMG exige campos que não podem ser inferidos só pelo CNPJ, incluindo comarca, nome exatamente igual ao cadastro pesquisado, dados do solicitante e código de verificação. Esses dados são usados somente na consulta em andamento, não aparecem no retorno da API e não são persistidos.
 
-As consultas estaduais usam os portais oficiais indicados pela SEF/MG e pela Sefaz/SP. Para SP, esta versão cobre a eCND de débitos não inscritos; a certidão de dívida ativa da PGE/SP é um portal separado e deve ser adicionada como novo serviço se o fluxo operacional exigir essa certidão também.
+As consultas estaduais usam os portais oficiais indicados pela SEF/MG e pela Sefaz/SP. Para SP, esta versão cobre a eCND de débitos não inscritos; a certidão de dívida ativa da PGE/SP é um portal separado e deve ser adicionada como novo serviço se o fluxo operacional exigir essa certidão também. A aplicação não resolve nem contorna CAPTCHA da Sefaz/SP; no Edge local, apenas aguarda a digitação humana e valida o PDF gerado.
 
 ## Privacidade e operação
 
