@@ -1,4 +1,4 @@
-"""Consulta assistida de certidao judicial de falencia e concordata no TJMG."""
+"""Tentativa automatica de certidao judicial de falencia e concordata no TJMG."""
 import asyncio
 import io
 import re
@@ -107,19 +107,16 @@ def is_certificate_text(text, cnpj):
     return cnpj in compact_cnpj(text) and 'certidao' in normalized and 'falencia' in normalized
 
 
-def pending_result(text, assisted):
+def pending_result(text, assisted=False):
     evidence = next((re.sub(r'\s+', ' ', line).strip() for line in text.splitlines()
                      if any(term in fold(line) for term in (
                          'codigo de verificacao', 'dados do solicitante', 'comarca',
                          'consulta por nome', 'email', 'e-mail'
                      ))), '')
-    if assisted:
-        return outcome('aguardando_usuario',
-                       'Complete no Edge os dados obrigatorios do RUPE/TJMG: comarca, nome exato, solicitante, CPF, e-mail e codigo de verificacao.',
-                       evidence or 'O RUPE exige dados que nao podem ser inferidos somente pelo CNPJ.',
-                       submitted=False, searched=False, stage='assistido')
-    return outcome('captcha',
-                   'O TJMG exige dados complementares e codigo de verificacao para solicitar a certidao judicial.',
+    normalized = fold(text)
+    status = 'captcha' if any(term in normalized for term in ('captcha', 'codigo de verificacao', 'digite os numeros')) else 'manual'
+    return outcome(status,
+                   'O TJMG exige dados complementares ou codigo de verificacao para solicitar a certidao judicial.',
                    evidence, submitted=False, searched=False, stage='captcha')
 
 
@@ -165,7 +162,20 @@ async def fill_first(locator, value):
     return False
 
 
-async def prepare_form(page, cnpj):
+async def fill_by_labels(page, patterns, value):
+    if not value:
+        return False
+    for pattern in patterns:
+        try:
+            await page.get_by_label(re.compile(pattern, re.I)).fill(value, timeout=800)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+async def prepare_form(page, cnpj, details=None):
+    details = details or {}
     try:
         await page.get_by_label(re.compile('JUR', re.I)).check(timeout=800)
     except Exception:
@@ -178,6 +188,12 @@ async def prepare_form(page, cnpj):
         await page.get_by_label(re.compile('CPF/CNPJ|CNPJ', re.I)).fill(cnpj, timeout=800)
     except Exception:
         await fill_first(page.locator('input[id*="cnpj" i], input[name*="cnpj" i]'), cnpj)
+    await fill_by_labels(page, ('comarca',), details.get('comarca'))
+    await fill_by_labels(page, ('nome.*empresa|razao|parte|pesquisad',), details.get('nome_empresa'))
+    await fill_by_labels(page, ('nome.*solicitante|solicitante',), details.get('solicitante_nome'))
+    await fill_by_labels(page, ('cpf.*solicitante|cpf do solicitante',), details.get('solicitante_cpf'))
+    await fill_by_labels(page, ('e-?mail|email',), details.get('solicitante_email'))
+    await fill_by_labels(page, ('codigo.*verificacao|captcha|verificacao',), details.get('codigo_verificacao'))
 
 
 async def read_download_content(download):
@@ -213,7 +229,7 @@ async def wait_for_certificate(page, cnpj, download_future=None, response_future
     raise FalenciaError('O TJMG nao concluiu a emissao da certidao judicial no prazo.', 'indisponivel')
 
 
-async def consult_falencia(browser, cnpj, assisted=False, update=None):
+async def consult_falencia(browser, cnpj, assisted=False, update=None, details=None):
     contexts = getattr(browser, 'contexts', [])
     if contexts:
         context = contexts[0]
@@ -260,19 +276,10 @@ async def consult_falencia(browser, cnpj, assisted=False, update=None):
                                 f'HTTP {response.status}')
         stage = 'formulario'
         progress('Abrindo o formulario de certidao judicial do TJMG...', evidence='')
-        await prepare_form(page, cnpj)
+        await prepare_form(page, cnpj, details or {})
         text = await body_text(page)
         if is_captcha_or_required_data(text):
-            if assisted:
-                pending = pending_result(text, True)
-                if update:
-                    update(**pending)
-                certificate, content = await wait_for_certificate(
-                    page, cnpj, download_future, response_future, popup_future
-                )
-                submitted = True
-            else:
-                return pending_result(text, False)
+            return pending_result(text)
         else:
             button = page.get_by_role('button', name=re.compile('Solicitar|Emitir|Gerar|Enviar', re.I))
             if await visible(button):
@@ -281,15 +288,7 @@ async def consult_falencia(browser, cnpj, assisted=False, update=None):
                 await page.wait_for_timeout(300)
                 text = await body_text(page)
                 if is_captcha_or_required_data(text) and not is_certificate_text(text, cnpj):
-                    if assisted:
-                        pending = pending_result(text, True)
-                        if update:
-                            update(**pending)
-                        certificate, content = await wait_for_certificate(
-                            page, cnpj, download_future, response_future, popup_future
-                        )
-                    else:
-                        return pending_result(text, False)
+                    return pending_result(text)
                 else:
                     certificate, content = await wait_for_certificate(
                         page, cnpj, download_future, response_future, popup_future

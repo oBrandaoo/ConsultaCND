@@ -38,6 +38,14 @@ def main():
             engine.update(rid,'falencia',status='encontrada',message='Falência e concordata simulada.',
                           evidence='Certidão judicial de teste',submitted=True,searched=True,
                           _pdf=b'%PDF-1.4\n%%EOF',checked_at=timestamp())
+        if 'estadual_mg' in run['results']:
+            engine.update(rid,'estadual_mg',status='encontrada',message='CDT estadual MG simulada.',
+                          evidence='Certidao estadual MG de teste',submitted=True,searched=True,
+                          _pdf=b'%PDF-1.4\n%%EOF',checked_at=timestamp())
+        if 'estadual_sp' in run['results']:
+            engine.update(rid,'estadual_sp',status='encontrada',message='CND estadual SP simulada.',
+                          evidence='Certidao estadual SP de teste',submitted=True,searched=True,
+                          _pdf=b'%PDF-1.4\n%%EOF',checked_at=timestamp())
 
     engine=Consultations(runner)
     server=Server(('127.0.0.1',0),engine)
@@ -58,6 +66,8 @@ def main():
             expect(page.locator('input[value=fgts]')).not_to_be_checked()
             expect(page.locator('input[value=trabalhista]')).not_to_be_checked()
             expect(page.locator('input[value=falencia]')).not_to_be_checked()
+            expect(page.locator('input[value=estadual_mg]')).not_to_be_checked()
+            expect(page.locator('input[value=estadual_sp]')).not_to_be_checked()
             expect(page.locator('input[value=municipal]')).not_to_be_checked()
             page.screenshot(path=str(artifacts/'consulta-federal-inicial.png'),full_page=True)
 
@@ -68,28 +78,32 @@ def main():
             page.locator('input[value=fgts]').check()
             page.locator('input[value=trabalhista]').check()
             page.locator('input[value=falencia]').check()
+            page.locator('input[value=estadual_mg]').check()
+            page.locator('input[value=estadual_sp]').check()
             page.locator('input[value=municipal]').check()
             page.get_by_role('button',name='Consultar selecionadas').click()
             expect(page.locator('#progress-label')).to_have_text('Verificação encerrada',timeout=10000)
-            expect(page.locator('.result-card')).to_have_count(5)
+            expect(page.locator('.result-card')).to_have_count(7)
             federal_card=page.locator('.result-card').filter(has_text='CND federal')
             expect(federal_card.locator('.evidence')).to_have_text('<script>alert(1)</script>')
             expect(page.locator('.result-card').filter(has_text='CRF do FGTS')).to_contain_text('Certificado FGTS de teste')
             expect(page.locator('.result-card').filter(has_text='CNDT trabalhista')).to_contain_text('Certidão trabalhista de teste')
             expect(page.locator('.result-card').filter(has_text='CND falência e concordata')).to_contain_text('Certidão judicial de teste')
+            expect(page.locator('.result-card').filter(has_text='CDT estadual MG')).to_contain_text('Certidao estadual MG de teste')
+            expect(page.locator('.result-card').filter(has_text='CND estadual SP')).to_contain_text('Certidao estadual SP de teste')
             assert page.locator('.evidence script').count()==0
-            expect(page.locator('.query-summary')).to_contain_text('Brasil + Minas Gerais + Santa Rita do Sapucaí')
-            expect(page.get_by_role('link',name='Baixar certidão em PDF')).to_have_count(5)
+            expect(page.locator('.query-summary')).to_contain_text('Brasil + Minas Gerais + São Paulo + Santa Rita do Sapucaí')
+            expect(page.get_by_role('link',name='Baixar certidão em PDF')).to_have_count(7)
             page.screenshot(path=str(artifacts/'consulta-federal-resultado.png'),full_page=True)
 
             page.reload()
-            expect(page.locator('.result-card')).to_have_count(5)
+            expect(page.locator('.result-card')).to_have_count(7)
             page.set_viewport_size({'width':390,'height':844})
             page.screenshot(path=str(artifacts/'consulta-federal-mobile.png'),full_page=True)
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             browser.close()
         assert not errors,errors
-        print('OK: fluxos federal, FGTS, CNDT, falência/concordata e Santa Rita, PDF, escape HTML, recuperação e layout móvel. Retornos simulados.')
+        print('OK: fluxos federal, FGTS, CNDT, falência/concordata, estaduais MG/SP e Santa Rita, PDF, escape HTML, recuperação e layout móvel. Retornos simulados.')
     finally:
         server.shutdown();server.server_close();thread.join()
 

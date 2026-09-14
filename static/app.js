@@ -2,8 +2,9 @@
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const formatCnpj=v=>v.replace(/^(.{2})(.{3})(.{3})(.{4})(.{2})$/,'$1.$2.$3/$4-$5');
-const shorts={federal:'RF',fgts:'FG',trabalhista:'JT',falencia:'TJ',municipal:'SR'};
+const shorts={federal:'RF',fgts:'FG',trabalhista:'JT',falencia:'TJ',estadual_mg:'MG',estadual_sp:'SP',municipal:'SR'};
 let config,run,pollTimer,toastTimer,pollFailures=0;
+const falenciaFields={comarca:'#falencia-comarca',nome_empresa:'#falencia-nome',solicitante_nome:'#falencia-solicitante',solicitante_cpf:'#falencia-cpf',solicitante_email:'#falencia-email',codigo_verificacao:'#falencia-codigo'};
 const pending=s=>['aguardando','consultando','aguardando_usuario'].includes(s);
 const tone=s=>s==='encontrada'?'good':['bloqueado','indisponivel'].includes(s)?'bad':['login','captcha','manual','sem_certidao'].includes(s)?'warning':s==='consultando'?'info':'';
 function toast(text){clearTimeout(toastTimer);$('#toast').textContent=text;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,3500);}
@@ -32,12 +33,17 @@ async function poll(){
   try{run=await fetchJson('/api/consultations/'+run.id);pollFailures=0;$('#connection-error').hidden=true;render();if(run.running)pollTimer=setTimeout(poll,1500);}
   catch(e){pollFailures++;$('#connection-error').textContent=e.message+' A consulta pode continuar no servidor. '+(pollFailures<5?'Tentando recuperar o retorno…':'Recarregue a página.');$('#connection-error').hidden=false;if(pollFailures<5)pollTimer=setTimeout(poll,3000);else{$('#query-fields').disabled=false;$('#submit').innerHTML='Consultar selecionadas <span>→</span>';}}
 }
+function selectedServices(){return [...document.querySelectorAll('input[name=service]:checked')].map(input=>input.value);}
+function toggleFalenciaFields(){const box=$('#falencia-fields');if(box)box.hidden=!selectedServices().includes('falencia');}
+function falenciaPayload(){const data={};for(const [key,selector] of Object.entries(falenciaFields)){const value=$(selector)?.value.trim();if(value)data[key]=value;}return data;}
 $('#query-form').addEventListener('submit',async event=>{
   event.preventDefault();if(!config||run?.running)return;$('#form-error').hidden=true;
-  const services=[...document.querySelectorAll('input[name=service]:checked')].map(input=>input.value);
+  const services=selectedServices();
   if(!services.length){error('Selecione pelo menos uma certidão.');return;}
   $('#query-fields').disabled=true;$('#submit').textContent='Enviando consulta…';clearTimeout(pollTimer);
-  try{run=await fetchJson('/api/consultations',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':config.token},body:JSON.stringify({cnpj:$('#cnpj').value,services})});pollFailures=0;sessionStorage.setItem('certifica-consulta',run.id);render();if(run.running)pollTimer=setTimeout(poll,1000);}
+  const body={cnpj:$('#cnpj').value,services};
+  if(services.includes('falencia'))body.falencia=falenciaPayload();
+  try{run=await fetchJson('/api/consultations',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':config.token},body:JSON.stringify(body)});pollFailures=0;sessionStorage.setItem('certifica-consulta',run.id);render();if(run.running)pollTimer=setTimeout(poll,1000);}
   catch(e){error(e.message);$('#query-fields').disabled=false;$('#submit').innerHTML='Consultar selecionadas <span>→</span>';}
 });
 $('#query-summary').addEventListener('click',async event=>{if(event.target.closest('[data-action=copy]')){try{await navigator.clipboard.writeText(run.cnpj);toast('CNPJ copiado.');}catch{toast('Copie o CNPJ exibido na consulta.');}}});
@@ -45,9 +51,10 @@ async function init(){
   try{
     config=await fetchJson('/api/config');
     $('#services').innerHTML=Object.entries(config.services).map(([key,service])=>'<label class="service-choice"><input type="checkbox" name="service" value="'+key+'" '+(config.default_services.includes(key)?'checked':'')+'><span><strong>'+esc(service.label)+'</strong><small>'+esc(service.mode)+'</small></span><span class="service-short">'+shorts[key]+'</span></label>').join('');
+    $('#services').addEventListener('change',toggleFalenciaFields);toggleFalenciaFields();
     $('#query-fields').disabled=false;
     const previous=sessionStorage.getItem('certifica-consulta');
-    if(previous){try{run=await fetchJson('/api/consultations/'+previous);$('#cnpj').value=formatCnpj(run.cnpj);document.querySelectorAll('input[name=service]').forEach(input=>input.checked=input.value in run.results);render();if(run.running)pollTimer=setTimeout(poll,1000);}catch{sessionStorage.removeItem('certifica-consulta');}}
+    if(previous){try{run=await fetchJson('/api/consultations/'+previous);$('#cnpj').value=formatCnpj(run.cnpj);document.querySelectorAll('input[name=service]').forEach(input=>input.checked=input.value in run.results);toggleFalenciaFields();render();if(run.running)pollTimer=setTimeout(poll,1000);}catch{sessionStorage.removeItem('certifica-consulta');}}
   }catch(e){error(e.message+' Confira se o servidor está em execução.');}
 }
 init();

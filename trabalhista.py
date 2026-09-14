@@ -1,4 +1,4 @@
-"""Consulta assistida da Certidao Negativa de Debitos Trabalhistas no TST."""
+"""Tentativa automatica da Certidao Negativa de Debitos Trabalhistas no TST."""
 import asyncio
 import io
 import re
@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 HOST = 'cndt-certidao.tst.jus.br'
 URL = f'https://{HOST}/gerarCertidao'
 MAX_PDF = 5 * 1024 * 1024
+HUMAN_CAPTCHA_TIMEOUT = 180
 
 
 class TrabalhistaError(Exception):
@@ -133,6 +134,11 @@ def unavailable_result(text, submitted=True):
                    evidence, submitted=submitted, searched=False, stage='resultado')
 
 
+def captcha_wait_message():
+    return ('O TST pediu os caracteres da imagem. Preencha o CAPTCHA na janela do Edge, '
+            'clique em Emitir Certidao e aguarde; a consulta continuara automaticamente.')
+
+
 async def body_text(page):
     try:
         return await page.locator('body').inner_text(timeout=2000)
@@ -172,8 +178,10 @@ async def click_emit(page):
     return False
 
 
-async def wait_for_certificate(page, cnpj, download_future=None, response_future=None, popup_future=None, timeout=30):
+async def wait_for_certificate(page, cnpj, download_future=None, response_future=None, popup_future=None,
+                               timeout=30, assisted=False, update=None):
     deadline = time.monotonic() + timeout
+    captcha_seen = False
     while time.monotonic() < deadline:
         if download_future and download_future.done():
             content = await read_download_content(download_future.result())
@@ -202,15 +210,29 @@ async def wait_for_certificate(page, cnpj, download_future=None, response_future
             content = await page.pdf(format='A4', print_background=True)
             certificate = parse_cndt_pdf(content, cnpj, certificate['control'])
             return certificate, content
+        if is_captcha_page(text):
+            blocked = unavailable_result(text)
+            if assisted:
+                if not captcha_seen and update:
+                    update(status='aguardando_usuario', message=captcha_wait_message(),
+                           evidence=blocked.get('evidence', ''), submitted=True,
+                           searched=False, stage='captcha')
+                captcha_seen = True
+            else:
+                raise TrabalhistaError(blocked['message'], blocked['status'], blocked.get('evidence', ''))
         if any(term in normalized for term in ('nao foi possivel', 'servico indisponivel', 'captcha invalido')):
-            raise TrabalhistaError(str(unavailable_result(text)['message']),
-                                   unavailable_result(text)['status'],
-                                   unavailable_result(text)['evidence'])
+            blocked = unavailable_result(text)
+            if not (assisted and blocked['status'] == 'captcha'):
+                raise TrabalhistaError(str(blocked['message']), blocked['status'], blocked['evidence'])
         await page.wait_for_timeout(400)
+    if captcha_seen:
+        raise TrabalhistaError('O CAPTCHA da CNDT nao foi concluido no Edge dentro de 3 minutos.',
+                               'captcha', 'Aguardando caracteres da imagem no TST.')
     raise TrabalhistaError('O TST nao concluiu a emissao da CNDT no prazo.', 'indisponivel')
 
 
-async def consult_trabalhista(browser, cnpj, assisted=False, update=None):
+async def consult_trabalhista(browser, cnpj, assisted=False, update=None,
+                              captcha_timeout=HUMAN_CAPTCHA_TIMEOUT):
     contexts = getattr(browser, 'contexts', [])
     if contexts:
         context = contexts[0]
@@ -267,13 +289,14 @@ async def consult_trabalhista(browser, cnpj, assisted=False, update=None):
             if not assisted:
                 return unavailable_result(text, submitted=False)
             stage = 'captcha'
+            blocked = unavailable_result(text, submitted=False)
             if update:
-                update(status='aguardando_usuario',
-                       message=('Digite os caracteres exibidos na imagem do TST no Edge e clique em '
-                                'Emitir Certidao. A ferramenta aguardara o PDF gerado.'),
-                       evidence='Validacao visual exigida pelo TST.')
+                update(status='aguardando_usuario', message=captcha_wait_message(),
+                       evidence=blocked.get('evidence', ''), submitted=False,
+                       searched=False, stage=stage)
             certificate, content = await wait_for_certificate(
-                page, cnpj, download_future, response_future, popup_future, timeout=180
+                page, cnpj, download_future, response_future, popup_future,
+                timeout=captcha_timeout, assisted=True, update=update
             )
         else:
             stage = 'emissao'
@@ -281,7 +304,8 @@ async def consult_trabalhista(browser, cnpj, assisted=False, update=None):
             if not submitted:
                 raise TrabalhistaError('Nao foi localizado o botao de emissao da certidao trabalhista.')
             certificate, content = await wait_for_certificate(
-                page, cnpj, download_future, response_future, popup_future, timeout=30
+                page, cnpj, download_future, response_future, popup_future,
+                timeout=captcha_timeout if assisted else 30, assisted=assisted, update=update
             )
 
         evidence = (
