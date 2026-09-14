@@ -1,4 +1,5 @@
 """Fluxo controlado da CNDT; nao consulta o TST nem emite certidao real."""
+import asyncio
 import json
 import sys
 import unittest
@@ -99,6 +100,115 @@ class BrowserFlowTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_visible_captcha_without_assistance_is_not_a_certificate(self):
         result = await self.flow(captcha=True)
+        self.assertEqual(result['status'], 'captcha', result)
+        self.assertNotIn('_pdf', result)
+
+    async def assisted_flow(self):
+        """Portal local que so exibe a CNDT depois da acao humana simulada."""
+        opened = []
+        html = '''<html><head><title>Certidao Negativa de Debitos Trabalhistas</title></head>
+        <body><label for="cpf-cnpj">CPF/CNPJ</label><input id="cpf-cnpj">
+        <button type="button" onclick="emitir()">Emitir Certidao</button>
+        <script>
+        const CERTIFICATE = ''' + json.dumps(CERTIFICATE) + ''';
+        function emitir() {
+          document.body.innerHTML = '<p>Digite os caracteres exibidos na imagem</p>';
+        }
+        window.completeCaptcha = () => {
+          document.body.innerHTML = '<pre>' + CERTIFICATE + '</pre>';
+        };
+        </script></body></html>'''
+
+        async def route(request_route):
+            if request_route.request.url == URL:
+                await request_route.fulfill(
+                    status=200, content_type='text/html; charset=utf-8', body=html
+                )
+            else:
+                await request_route.abort()
+
+        browser = self.browser
+
+        class Adapter:
+            contexts = []
+
+            async def new_page(self, **kwargs):
+                page = await browser.new_page(**kwargs)
+                opened.append(page)
+                await page.context.route('**/*', route)
+                return page
+
+        return Adapter(), opened
+
+    async def wait_for_user_update(self, updates):
+        for _ in range(100):
+            if any(item.get('status') == 'aguardando_usuario' for item in updates):
+                return
+            await asyncio.sleep(.02)
+        self.fail('A consulta assistida nao publicou aguardando_usuario.')
+
+    async def test_assisted_captcha_publishes_waiting_for_user(self):
+        adapter, opened = await self.assisted_flow()
+        updates = []
+        task = asyncio.create_task(consult_trabalhista(
+            adapter, CNPJ, assisted=True, update=lambda **changes: updates.append(changes)
+        ))
+        try:
+            await self.wait_for_user_update(updates)
+            self.assertFalse(opened[0].is_closed())
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_assisted_captcha_continues_after_simulated_human_action(self):
+        adapter, opened = await self.assisted_flow()
+        updates = []
+        task = asyncio.create_task(consult_trabalhista(
+            adapter, CNPJ, assisted=True, update=lambda **changes: updates.append(changes)
+        ))
+        try:
+            await self.wait_for_user_update(updates)
+            await opened[0].evaluate('window.completeCaptcha()')
+            result = await asyncio.wait_for(task, 5)
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual(result['status'], 'encontrada', result)
+        self.assertTrue(result['_pdf'].startswith(b'%PDF-'))
+        self.assertEqual(result['certificate']['control'], CONTROL)
+
+    async def test_assisted_invalid_captcha_keeps_waiting_for_retry(self):
+        adapter, opened = await self.assisted_flow()
+        updates = []
+        task = asyncio.create_task(consult_trabalhista(
+            adapter, CNPJ, assisted=True, update=lambda **changes: updates.append(changes)
+        ))
+        try:
+            await self.wait_for_user_update(updates)
+            await opened[0].evaluate(
+                "document.body.innerHTML = '<p>Captcha invalido. Digite os caracteres exibidos na imagem</p>'"
+            )
+            await asyncio.sleep(.2)
+            self.assertFalse(task.done())
+            await opened[0].evaluate('window.completeCaptcha()')
+            result = await asyncio.wait_for(task, 5)
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual(result['status'], 'encontrada', result)
+        self.assertTrue(result['_pdf'].startswith(b'%PDF-'))
+
+    async def test_assisted_captcha_timeout_returns_captcha_without_pdf(self):
+        adapter, _ = await self.assisted_flow()
+        updates = []
+        result = await asyncio.wait_for(consult_trabalhista(
+            adapter, CNPJ, assisted=True, update=lambda **changes: updates.append(changes),
+            captcha_timeout=.05,
+        ), 2)
+        self.assertTrue(any(item.get('status') == 'aguardando_usuario' for item in updates))
         self.assertEqual(result['status'], 'captcha', result)
         self.assertNotIn('_pdf', result)
 

@@ -59,7 +59,6 @@ class BrowserFlowTest(unittest.IsolatedAsyncioTestCase):
     async def flow(self, captcha=False, assisted=False):
         opened = []
         body = 'Codigo de Verificacao/CAPTCHA' if captcha else CERTIFICATE
-        completion = CERTIFICATE if captcha and assisted else body
         html = '''<html><head><title>Certidao Civel</title></head><body>
         <label><input type="radio" name="pessoa" value="juridica"> Pessoa Juridica</label>
         <label for="cpf-cnpj">CPF/CNPJ</label><input id="cpf-cnpj">
@@ -67,11 +66,7 @@ class BrowserFlowTest(unittest.IsolatedAsyncioTestCase):
         <button type="button" onclick="solicitar()">Solicitar</button>
         <script>
         const CERTIFICATE = ''' + json.dumps(body) + ''';
-        const COMPLETION = ''' + json.dumps(completion) + ''';
-        function solicitar() {
-          document.body.innerHTML = '<pre>' + CERTIFICATE + '</pre>';
-          if (COMPLETION !== CERTIFICATE) setTimeout(() => document.body.innerHTML = '<pre>' + COMPLETION + '</pre>', 100);
-        }
+        function solicitar() { document.body.innerHTML = '<pre>' + CERTIFICATE + '</pre>'; }
         </script></body></html>'''
 
         async def route(request_route):
@@ -103,10 +98,10 @@ class BrowserFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['_pdf'].startswith(b'%PDF-'))
         self.assertEqual(result['certificate']['control'], CONTROL)
 
-    async def test_captcha_waits_for_user_and_resumes_when_assisted(self):
+    async def test_captcha_is_not_waited_when_assisted(self):
         result = await self.flow(captcha=True, assisted=True)
-        self.assertEqual(result['status'], 'encontrada', result)
-        self.assertTrue(result['_pdf'].startswith(b'%PDF-'))
+        self.assertEqual(result['status'], 'captcha', result)
+        self.assertNotIn('_pdf', result)
 
     async def test_captcha_is_reported_without_assistance(self):
         result = await self.flow(captcha=True)
