@@ -5,8 +5,9 @@ import time
 import unittest
 import urllib.request
 import urllib.error
+from unittest.mock import patch
 from app import Server
-from consultations import Consultations, ValidationError, assess_page, normalize_cnpj, portal_url
+from consultations import Consultations, ValidationError, assess_page, normalize_cnpj, normalize_cpf, portal_url, run_portal
 
 CNPJ='18192898000102'
 URL='https://servicos.receitafederal.gov.br/servico/certidoes/'
@@ -18,6 +19,13 @@ class ClassificationTest(unittest.TestCase):
         self.assertEqual(normalize_cnpj('12.ABC.345/01DE-35'),'12ABC34501DE35')
         for value in ['18192898000103','00000000000000',[],None,'<script>']:
             with self.assertRaises(ValidationError): normalize_cnpj(value)
+
+    def test_congonhal_cpf_validation(self):
+        self.assertEqual(normalize_cpf('529.982.247-25'),'52998224725')
+        for value in ['52998224724','000.000.000-00','123',None,[]]:
+            with self.subTest(value=value):
+                with self.assertRaises(ValidationError):
+                    normalize_cpf(value)
 
     def test_federal_live_error_is_not_debt(self):
         text='Mensagem de Aviso\nNão foi possível concluir a ação para o contribuinte informado. Por favor, tente novamente dentro de alguns minutos. 023'
@@ -57,7 +65,7 @@ class ClassificationTest(unittest.TestCase):
 
     def test_services_are_available_without_city_selector(self):
         config=Consultations(lambda _:None).config()
-        self.assertEqual(list(config['services']),['federal','fgts','trabalhista','falencia','estadual_mg','estadual_sp','municipal'])
+        self.assertEqual(list(config['services']),['federal','fgts','trabalhista','falencia','estadual_mg','estadual_sp','municipal','municipal_congonhal'])
         self.assertNotIn('cities',config)
         self.assertIn('receitafederal',portal_url('federal',None))
         self.assertIn('consulta-crf.caixa.gov.br',portal_url('fgts',None))
@@ -66,6 +74,23 @@ class ClassificationTest(unittest.TestCase):
         self.assertIn('fazenda.mg.gov.br',portal_url('estadual_mg',None))
         self.assertIn('fazenda.sp.gov.br',portal_url('estadual_sp',None))
         self.assertIn('santaritasapucai',portal_url('municipal',None))
+        self.assertIn('congonhal-mg.prefeituramoderna.com.br',portal_url('municipal_congonhal',None))
+
+class RunPortalTest(unittest.IsolatedAsyncioTestCase):
+    async def test_congonhal_receives_requester_inputs(self):
+        captured={}
+        async def fake_consult(browser,cnpj,update=None,requester=None):
+            captured.update(browser=browser,cnpj=cnpj,update=update,requester=requester)
+            return {'status':'encontrada'}
+
+        requester={'nome_usuario':'Usuario de Teste','cpf_usuario':'52998224725'}
+        with patch('congonhal.consult_congonhal',fake_consult):
+            result=await run_portal('browser','municipal_congonhal',CNPJ,None,inputs={'congonhal':requester})
+
+        self.assertEqual(result['status'],'encontrada')
+        self.assertEqual(captured['browser'],'browser')
+        self.assertEqual(captured['cnpj'],CNPJ)
+        self.assertIs(captured['requester'],requester)
 
 class EngineTest(unittest.TestCase):
     def setUp(self):
@@ -92,7 +117,7 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(self.engine.get(run['id'])['results']['federal']['status'],'sem_certidao')
 
     def test_invalid_request_never_starts_browser(self):
-        for change in [{'services':[]},{'services':['unknown']},{'services':['federal','federal']},{'services':[{}]},{'city':'Pouso Alegre'},{'cnpj':'000'},{'assisted':True},{'services':['federal','fgts','municipal','unknown']}]:
+        for change in [{'services':[]},{'services':['unknown']},{'services':['federal','federal']},{'services':[{}]},{'city':'Pouso Alegre'},{'cnpj':'000'},{'assisted':True},{'services':['federal','fgts','municipal_congonhal','unknown']}]:
             with self.assertRaises(ValidationError): self.engine.start({**DATA,**change})
         self.assertEqual(self.engine.runs,{})
 
@@ -128,6 +153,24 @@ class EngineTest(unittest.TestCase):
         result=self.engine.get(run['id'])['results']['federal']
         self.assertEqual(result['status'],'indisponivel')
         self.assertFalse(result['submitted'])
+
+    def test_congonhal_requires_requester_name_and_cpf(self):
+        with self.assertRaises(ValidationError):
+            self.engine.start({'cnpj':CNPJ,'services':['municipal_congonhal']})
+        with self.assertRaises(ValidationError):
+            self.engine.start({'cnpj':CNPJ,'services':['municipal_congonhal'],'congonhal':{'nome_usuario':'Usuario'}})
+        with self.assertRaises(ValidationError):
+            self.engine.start({'cnpj':CNPJ,'services':['municipal_congonhal'],'congonhal':{'nome_usuario':'  ','cpf_usuario':'529.982.247-25'}})
+        with self.assertRaises(ValidationError):
+            self.engine.start({'cnpj':CNPJ,'services':['municipal_congonhal'],'congonhal':{'nome_usuario':'Usuario','cpf_usuario':'529.982.247-24'}})
+        with self.assertRaises(ValidationError):
+            self.engine.start({'cnpj':CNPJ,'services':['municipal_congonhal'],'congonhal':{'nome_usuario':'Usuario','cpf_usuario':'529.982.247-25','extra':'x'}})
+        with self.assertRaises(ValidationError):
+            self.engine.start({'cnpj':CNPJ,'services':['municipal_congonhal'],'congonhal':{'nome_usuario':'A'*51,'cpf_usuario':'529.982.247-25'}})
+        with self.assertRaises(ValidationError):
+            self.engine.start({'cnpj':CNPJ,'services':['federal'],'congonhal':{'nome_usuario':'Usuario','cpf_usuario':'529.982.247-25'}})
+        payload=self.engine._validate_congonhal_inputs({'nome_usuario':' Usuario  de   Teste ','cpf_usuario':'529.982.247-25'},True)
+        self.assertEqual(payload,{'nome_usuario':'Usuario de Teste','cpf_usuario':'52998224725'})
 
 class HttpTest(unittest.TestCase):
     def setUp(self):
@@ -178,9 +221,9 @@ class HttpTest(unittest.TestCase):
     def test_only_configured_certificate_requests_are_accepted(self):
         status,body=self.request('/api/consultations',{'cnpj':CNPJ,'services':['estadual']})
         self.assertEqual(status,400)
-        self.assertIn('Santa Rita',json.loads(body)['error'])
+        self.assertIn('Congonhal',json.loads(body)['error'])
         config=json.loads(self.request('/api/config')[1])
-        self.assertEqual(list(config['services']),['federal','fgts','trabalhista','falencia','estadual_mg','estadual_sp','municipal'])
+        self.assertEqual(list(config['services']),['federal','fgts','trabalhista','falencia','estadual_mg','estadual_sp','municipal','municipal_congonhal'])
         self.assertNotIn('cities',config)
 
     def test_santa_rita_pdf_download_matches_query(self):
@@ -197,6 +240,27 @@ class HttpTest(unittest.TestCase):
         result=json.loads(self.request('/api/consultations/'+rid)[1])['results']['municipal']
         with urllib.request.urlopen(self.base+result['document_url']) as response:
             self.assertEqual(response.headers['Content-Type'],'application/pdf')
+            self.assertEqual(response.read(),content)
+
+    def test_congonhal_pdf_download_matches_query(self):
+        content=b'%PDF-1.7\nCongonhal controlled test\n%%EOF'
+        async def runner(rid):
+            self.engine.update(rid,'municipal_congonhal',status='encontrada',message='CND Congonhal de teste.',_pdf=content)
+        self.engine.runner=runner
+        status,body=self.request('/api/consultations',{'cnpj':CNPJ,'services':['municipal_congonhal'],
+            'congonhal':{'nome_usuario':'Usuario de Teste','cpf_usuario':'529.982.247-25'}})
+        self.assertEqual(status,202)
+        rid=json.loads(body)['id']
+        deadline=time.monotonic()+3
+        while self.engine.get(rid)['running'] and time.monotonic()<deadline:time.sleep(.01)
+        payload=json.loads(self.request('/api/consultations/'+rid)[1])
+        self.assertNotIn('_inputs',payload)
+        self.assertNotIn('congonhal',payload)
+        result=payload['results']['municipal_congonhal']
+        self.assertIn('/documents/municipal_congonhal',result['document_url'])
+        with urllib.request.urlopen(self.base+result['document_url']) as response:
+            self.assertEqual(response.headers['Content-Type'],'application/pdf')
+            self.assertIn('cnd-congonhal-',response.headers['Content-Disposition'])
             self.assertEqual(response.read(),content)
 
     def test_federal_pdf_download_matches_query(self):

@@ -20,6 +20,10 @@ def main():
             engine.update(rid,'municipal',status='encontrada',message='Certidão municipal simulada.',
                           evidence='Controle municipal de teste',submitted=True,searched=True,
                           _pdf=b'%PDF-1.4\n%%EOF',checked_at=timestamp())
+        if 'municipal_congonhal' in run['results']:
+            engine.update(rid,'municipal_congonhal',status='encontrada',message='CND Congonhal simulada.',
+                          evidence='Controle municipal de Congonhal',submitted=True,searched=True,
+                          _pdf=b'%PDF-1.4\n%%EOF',checked_at=timestamp())
         if 'federal' in run['results']:
             engine.update(rid,'federal',status='consultando',message='Download federal simulado.')
             await asyncio.sleep(.5)
@@ -69,6 +73,8 @@ def main():
             expect(page.locator('input[value=estadual_mg]')).not_to_be_checked()
             expect(page.locator('input[value=estadual_sp]')).not_to_be_checked()
             expect(page.locator('input[value=municipal]')).not_to_be_checked()
+            expect(page.locator('input[value=municipal_congonhal]')).not_to_be_checked()
+            expect(page.locator('#congonhal-fields')).to_be_hidden()
             page.screenshot(path=str(artifacts/'consulta-federal-inicial.png'),full_page=True)
 
             page.get_by_label('CNPJ',exact=True).fill('00000000000000')
@@ -81,9 +87,20 @@ def main():
             page.locator('input[value=estadual_mg]').check()
             page.locator('input[value=estadual_sp]').check()
             page.locator('input[value=municipal]').check()
+            page.locator('input[value=municipal_congonhal]').check()
+            expect(page.locator('#congonhal-fields')).to_be_visible()
+            page.locator('input[value=municipal_congonhal]').uncheck()
+            expect(page.locator('#congonhal-fields')).to_be_hidden()
+            page.locator('input[value=municipal_congonhal]').check()
+            expect(page.locator('#congonhal-fields')).to_be_visible()
+            page.get_by_role('button',name='Consultar selecionadas').click()
+            expect(page.locator('#form-error')).to_be_visible()
+            expect(page.locator('#form-error')).to_contain_text('Congonhal')
+            page.get_by_label('Nome do usuário',exact=True).fill('Usuario de Teste')
+            page.get_by_label('CPF do usuário',exact=True).fill('529.982.247-25')
             page.get_by_role('button',name='Consultar selecionadas').click()
             expect(page.locator('#progress-label')).to_have_text('Verificação encerrada',timeout=10000)
-            expect(page.locator('.result-card')).to_have_count(7)
+            expect(page.locator('.result-card')).to_have_count(8)
             federal_card=page.locator('.result-card').filter(has_text='CND federal')
             expect(federal_card.locator('.evidence')).to_have_text('<script>alert(1)</script>')
             expect(page.locator('.result-card').filter(has_text='CRF do FGTS')).to_contain_text('Certificado FGTS de teste')
@@ -91,20 +108,21 @@ def main():
             expect(page.locator('.result-card').filter(has_text='CND falência e concordata')).to_contain_text('Certidão judicial de teste')
             expect(page.locator('.result-card').filter(has_text='CDT estadual MG')).to_contain_text('Certidao estadual MG de teste')
             expect(page.locator('.result-card').filter(has_text='CND estadual SP')).to_contain_text('Certidao estadual SP de teste')
+            expect(page.locator('.result-card').filter(has_text='CND municipal Congonhal')).to_contain_text('Controle municipal de Congonhal')
             assert page.locator('.evidence script').count()==0
-            expect(page.locator('.query-summary')).to_contain_text('Brasil + Minas Gerais + São Paulo + Santa Rita do Sapucaí')
-            expect(page.get_by_role('link',name='Baixar certidão em PDF')).to_have_count(7)
-            expect(page.locator('.pdf-preview iframe')).to_have_count(7)
+            expect(page.locator('.query-summary')).to_contain_text('Brasil + Minas Gerais + São Paulo + Santa Rita do Sapucaí + Congonhal')
+            expect(page.get_by_role('link',name='Baixar certidão em PDF')).to_have_count(8)
+            expect(page.locator('.pdf-preview iframe')).to_have_count(8)
             page.screenshot(path=str(artifacts/'consulta-federal-resultado.png'),full_page=True)
 
             page.reload()
-            expect(page.locator('.result-card')).to_have_count(7)
+            expect(page.locator('.result-card')).to_have_count(8)
             page.set_viewport_size({'width':390,'height':844})
             page.screenshot(path=str(artifacts/'consulta-federal-mobile.png'),full_page=True)
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             browser.close()
         assert not errors,errors
-        print('OK: fluxos federal, FGTS, CNDT, falência/concordata, estaduais MG/SP e Santa Rita, PDF, escape HTML, recuperação e layout móvel. Retornos simulados.')
+        print('OK: fluxos federal, FGTS, CNDT, falência/concordata, estaduais MG/SP, Santa Rita e Congonhal, PDF, escape HTML, recuperação e layout móvel. Retornos simulados.')
     finally:
         server.shutdown();server.server_close();thread.join()
 
