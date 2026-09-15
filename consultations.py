@@ -25,6 +25,7 @@ SERVICES = {
     'estadual_mg': {'label':'CDT estadual MG', 'issuer':'Secretaria de Estado de Fazenda de Minas Gerais', 'url':'https://www2.fazenda.mg.gov.br/sol/', 'mode':'Minas Gerais · tentativa automática em Chromium, sem Edge'},
     'estadual_sp': {'label':'CND estadual SP', 'issuer':'Secretaria da Fazenda e Planejamento de São Paulo', 'url':'https://www10.fazenda.sp.gov.br/CertidaoNegativaDeb/Pages/EmissaoCertidaoNegativa.aspx', 'mode':'São Paulo · eCND não inscritos; CAPTCHA pode ser concluído no Edge local'},
     'municipal': {'label':'CND municipal', 'issuer':'Prefeitura de Santa Rita do Sapucaí', 'url':'https://servicoswebsantaritasapucai.sgpcloud.net:8443/servicosweb/home.jsf', 'mode':'Santa Rita do Sapucaí · automática com PDF'},
+    'municipal_congonhal': {'label':'CND municipal Congonhal', 'issuer':'Prefeitura Municipal de Congonhal', 'url':'https://congonhal-mg.prefeituramoderna.com.br/meuiptu/index.php#', 'mode':'Congonhal · tentativa automática com PDF; exige nome e CPF do usuário'},
 }
 STATUS = {'aguardando':'Aguardando','consultando':'Consultando','encontrada':'Certidão localizada',
     'sem_certidao':'Nenhuma certidão localizada','login':'Login necessário','captcha':'Validação do portal recusada',
@@ -50,6 +51,21 @@ def normalize_cnpj(value):
         if numbers[size]!=(0 if remainder<2 else 11-remainder):
             raise ValidationError('CNPJ inválido. Confira os dígitos verificadores.')
     return value
+
+def normalize_cpf(value):
+    if not isinstance(value,str):
+        raise ValidationError('Informe um CPF de usuario valido para Congonhal.')
+    numbers=[int(c) for c in re.sub(r'\D','',value)]
+    if len(numbers)!=11 or len(set(numbers))==1:
+        raise ValidationError('CPF do usuario de Congonhal invalido.')
+    for size in (9,10):
+        total=sum(numbers[i]*(size+1-i) for i in range(size))
+        digit=(total*10)%11
+        if digit==10:
+            digit=0
+        if numbers[size]!=digit:
+            raise ValidationError('CPF do usuario de Congonhal invalido.')
+    return ''.join(str(n) for n in numbers)
 
 def formatted_cnpj(v):
     return f'{v[:2]}.{v[2:5]}.{v[5:8]}/{v[8:12]}-{v[12:]}'
@@ -105,6 +121,9 @@ async def run_portal(browser,service,cnpj,city,assisted=False,update=None,inputs
     if service=='municipal':
         from santa_rita import consult_santa_rita
         return await consult_santa_rita(browser,cnpj,update)
+    if service=='municipal_congonhal':
+        from congonhal import consult_congonhal
+        return await consult_congonhal(browser,cnpj,update,(inputs or {}).get('congonhal') or {})
     if service=='federal':
         from federal import consult_federal
         return await consult_federal(browser,cnpj,assisted,update)
@@ -123,7 +142,7 @@ async def run_portal(browser,service,cnpj,city,assisted=False,update=None,inputs
     if service=='estadual_sp':
         from estadual_sp import consult_estadual_sp
         return await consult_estadual_sp(browser,cnpj,assisted,update)
-    raise ValidationError('Esta versão consulta somente as CNDs federal, FGTS, trabalhista, falência/concordata, estaduais MG/SP ou municipal de Santa Rita.')
+    raise ValidationError('Esta versão consulta somente as CNDs federal, FGTS, trabalhista, falência/concordata, estaduais MG/SP ou municipais de Santa Rita e Congonhal.')
 
 class Consultations:
     def __init__(self,runner=None,max_queue=None):
@@ -144,17 +163,18 @@ class Consultations:
         return {'services':SERVICES,'statuses':STATUS,'default_services':['federal']}
 
     def start(self,data):
-        if set(data) - {'cnpj','services','falencia'}:
-            raise ValidationError('Envie somente o CNPJ, as certidões selecionadas e os dados judiciais permitidos.')
+        if set(data) - {'cnpj','services','falencia','congonhal'}:
+            raise ValidationError('Envie somente o CNPJ, as certidões selecionadas e os dados permitidos.')
         cnpj=normalize_cnpj(data.get('cnpj'))
         services=data.get('services')
         if (not isinstance(services,list) or not services or len(services)>len(SERVICES) or
                 any(not isinstance(service,str) or service not in SERVICES for service in services) or
                 len(set(services))!=len(services)):
-            raise ValidationError('Selecione a CND federal, o CRF do FGTS, a CNDT trabalhista, a CND de falência/concordata, as estaduais MG/SP ou a municipal de Santa Rita, sem repetições.')
+            raise ValidationError('Selecione a CND federal, o CRF do FGTS, a CNDT trabalhista, a CND de falência/concordata, as estaduais MG/SP ou as municipais de Santa Rita/Congonhal, sem repetições.')
         from browser_worker import browser_mode
         selected=set(services)
         falencia_inputs=self._validate_falencia_inputs(data.get('falencia'), 'falencia' in selected)
+        congonhal_inputs=self._validate_congonhal_inputs(data.get('congonhal'), 'municipal_congonhal' in selected)
         assisted=bool({'federal','fgts','trabalhista','estadual_sp'} & selected) and browser_mode()=='local-edge'
         scope_parts=[]
         if {'federal','fgts','trabalhista'} & selected:
@@ -165,13 +185,15 @@ class Consultations:
             scope_parts.append('São Paulo')
         if 'municipal' in selected:
             scope_parts.append('Santa Rita do Sapucaí · MG')
+        if 'municipal_congonhal' in selected:
+            scope_parts.append('Congonhal · MG')
         scope=' + '.join(scope_parts) if scope_parts else 'Brasil'
         with self.lock:
             self._expire()
             rid=secrets.token_urlsafe(18)
             self.runs[rid]={'id':rid,'cnpj':cnpj,'scope':scope,'assisted':assisted,'started_at':timestamp(),
                 'processing_started_at':None,'finished_at':None,'phase':'queued','created':time.monotonic(),'running':True,
-                '_inputs':{'falencia':falencia_inputs},
+                '_inputs':{'falencia':falencia_inputs,'congonhal':congonhal_inputs},
                 'results':{s:{'service':s,'status':'aguardando','message':'Consulta adicionada à fila do servidor.','evidence':'','submitted':False,'url':portal_url(s,None),'checked_at':None} for s in services}}
             try:
                 self.jobs.put_nowait(rid)
@@ -244,6 +266,26 @@ class Consultations:
             result[key]=item
         return result
 
+    def _validate_congonhal_inputs(self,value,selected):
+        if value is None:
+            if selected:
+                raise ValidationError('Informe nome e CPF do usuario para consultar Congonhal.')
+            return {}
+        if not selected:
+            raise ValidationError('Envie dados de Congonhal somente quando a CND municipal de Congonhal estiver selecionada.')
+        if not isinstance(value,dict):
+            raise ValidationError('Dados de Congonhal invalidos.')
+        allowed={'nome_usuario','cpf_usuario'}
+        if set(value)-allowed:
+            raise ValidationError('Envie somente nome e CPF do usuario para Congonhal.')
+        nome=value.get('nome_usuario')
+        if not isinstance(nome,str):
+            raise ValidationError('Informe o nome do usuario para Congonhal.')
+        nome=re.sub(r'\s+',' ',nome).strip()
+        if len(nome)<3 or len(nome)>50:
+            raise ValidationError('Nome do usuario de Congonhal deve ter entre 3 e 50 caracteres.')
+        return {'nome_usuario':nome,'cpf_usuario':normalize_cpf(value.get('cpf_usuario'))}
+
     def get_document(self,rid,service):
         with self.lock:
             self._expire()
@@ -251,7 +293,7 @@ class Consultations:
             result=run['results'].get(service) if run else None
             if service not in SERVICES or not result or result['status']!='encontrada' or not result.get('_pdf'):
                 raise ValidationError('PDF não encontrado ou expirado. Inicie uma nova consulta.')
-            prefix={'federal':'cnd-federal','fgts':'crf-fgts','trabalhista':'cndt-trabalhista','falencia':'cnd-falencia-concordata','estadual_mg':'cdt-estadual-mg','estadual_sp':'cnd-estadual-sp','municipal':'cnd-santa-rita'}[service]
+            prefix={'federal':'cnd-federal','fgts':'crf-fgts','trabalhista':'cndt-trabalhista','falencia':'cnd-falencia-concordata','estadual_mg':'cdt-estadual-mg','estadual_sp':'cnd-estadual-sp','municipal':'cnd-santa-rita','municipal_congonhal':'cnd-congonhal'}[service]
             return result['_pdf'],f'{prefix}-{run["cnpj"]}.pdf'
 
     def _execute(self,rid):
@@ -298,7 +340,8 @@ class Consultations:
                     else:
                         from browser_worker import launch_municipal_browser
                         browser=await launch_municipal_browser(p)
-                        message='Acessando o portal de Santa Rita do Sapucaí…'
+                        issuer={'municipal':'Santa Rita do Sapucaí','municipal_congonhal':'Congonhal'}[service]
+                        message=f'Acessando o portal de {issuer}…'
                         assisted=False
                     self.update(rid,service,status='consultando',message=message)
                     result=await run_portal(browser,service,run['cnpj'],None,assisted,

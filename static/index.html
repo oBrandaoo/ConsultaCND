@@ -7,12 +7,12 @@
 <link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script>
 </head>
 <body>
-<header><a class="brand" href="/"><span class="mark">c<span>✓</span></span>certifica<span class="brand-label">CONSULTA DE CNDs</span></a><span class="region"><span class="dot"></span> Brasil · MG · SP · Santa Rita</span></header>
+<header><a class="brand" href="/"><span class="mark">c<span>✓</span></span>certifica<span class="brand-label">CONSULTA DE CNDs</span></a><span class="region"><span class="dot"></span> Brasil · MG · SP · Santa Rita · Congonhal</span></header>
 <main>
-<section class="hero"><div class="eyebrow">FEDERAL · FGTS · TRABALHISTA · JUDICIAL · ESTADUAL · MUNICIPAL</div><h1>Informe o CNPJ. <br>Baixe suas certidões.</h1><p>Consulte a CND federal, o CRF do FGTS, a CNDT trabalhista, a certidão de falência e concordata, as CNDs estaduais de MG/SP e a CND municipal de Santa Rita do Sapucaí.</p></section>
+<section class="hero"><div class="eyebrow">FEDERAL · FGTS · TRABALHISTA · JUDICIAL · ESTADUAL · MUNICIPAL</div><h1>Informe o CNPJ. <br>Baixe suas certidões.</h1><p>Consulte a CND federal, o CRF do FGTS, a CNDT trabalhista, a certidão de falência e concordata, as CNDs estaduais de MG/SP e as CNDs municipais de Santa Rita do Sapucaí e Congonhal.</p></section>
 <div class="workspace">
 <section class="panel query-panel" aria-labelledby="query-title">
-<div class="panel-heading"><span class="step">01</span><div><h2 id="query-title">Consultar certidões</h2><p>Federal, FGTS, trabalhista, judicial, estadual e Santa Rita do Sapucaí</p></div></div>
+<div class="panel-heading"><span class="step">01</span><div><h2 id="query-title">Consultar certidões</h2><p>Federal, FGTS, trabalhista, judicial, estadual, Santa Rita e Congonhal</p></div></div>
 <form id="query-form">
 <fieldset id="query-fields" disabled>
 <label class="field" for="cnpj">CNPJ</label><input id="cnpj" name="cnpj" required maxlength="18" placeholder="00.000.000/0000-00" autocomplete="off" autocapitalize="characters" spellcheck="false">
@@ -26,6 +26,10 @@
 <label class="field" for="falencia-email">E-mail do solicitante</label><input id="falencia-email" name="falencia-email" maxlength="120" placeholder="nome@exemplo.com" inputmode="email">
 <label class="field" for="falencia-codigo">Código de verificação</label><input id="falencia-codigo" name="falencia-codigo" maxlength="20" placeholder="Quando o RUPE exigir">
 </div>
+<div id="congonhal-fields" hidden>
+<label class="field" for="congonhal-nome-usuario">Nome do usuário</label><input id="congonhal-nome-usuario" name="congonhal-nome-usuario" maxlength="50" placeholder="Nome de quem solicita a CND">
+<label class="field" for="congonhal-cpf-usuario">CPF do usuário</label><input id="congonhal-cpf-usuario" name="congonhal-cpf-usuario" maxlength="14" placeholder="000.000.000-00" inputmode="numeric">
+</div>
 <p class="mode-note">As opções entregam o PDF automaticamente quando o órgão libera a certidão. Os portais podem aplicar validações de acesso.</p>
 <div id="form-error" class="error" role="alert" hidden></div>
 <button id="submit" class="button primary" type="submit">Consultar selecionadas <span>→</span></button>
@@ -38,13 +42,13 @@
 <div id="connection-error" class="error" role="alert" hidden></div>
 <div id="query-summary" class="query-summary" hidden></div>
 <div id="results">
-<div class="empty"><div class="empty-art"><svg viewBox="0 0 80 90" fill="none" aria-hidden="true"><rect x="13" y="5" width="50" height="68" rx="6" stroke="currentColor" stroke-width="2"/><path d="M24 22h28M24 32h28M24 42h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="56" cy="63" r="18" fill="#f6faf6" stroke="currentColor" stroke-width="2"/><path d="m48 63 5 5 10-11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3>Pronto para consultar</h3><p>Informe um CNPJ válido e escolha as certidões.</p><div class="empty-tags"><span>CND federal</span><span>CRF do FGTS</span><span>CNDT trabalhista</span><span>Falência e concordata</span><span>Estadual MG</span><span>Estadual SP</span><span>Santa Rita do Sapucaí</span></div></div>
+<div class="empty"><div class="empty-art"><svg viewBox="0 0 80 90" fill="none" aria-hidden="true"><rect x="13" y="5" width="50" height="68" rx="6" stroke="currentColor" stroke-width="2"/><path d="M24 22h28M24 32h28M24 42h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="56" cy="63" r="18" fill="#f6faf6" stroke="currentColor" stroke-width="2"/><path d="m48 63 5 5 10-11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div><h3>Pronto para consultar</h3><p>Informe um CNPJ válido e escolha as certidões.</p><div class="empty-tags"><span>CND federal</span><span>CRF do FGTS</span><span>CNDT trabalhista</span><span>Falência e concordata</span><span>Estadual MG</span><span>Estadual SP</span><span>Santa Rita do Sapucaí</span><span>Congonhal</span></div></div>
 </div>
 <p class="result-note">Falha de acesso, validação pendente ou ausência de certidão não comprovam dívida.</p>
 <div id="run-announcement" class="sr-only" role="status" aria-live="polite"></div>
 </section>
 </div>
-<footer><span>Certifica · Consulta de CNDs</span><span>Receita Federal · Caixa · TST · TJMG · SEF/MG · Sefaz/SP · Santa Rita do Sapucaí</span></footer>
+<footer><span>Certifica · Consulta de CNDs</span><span>Receita Federal · Caixa · TST · TJMG · SEF/MG · Sefaz/SP · Santa Rita do Sapucaí · Congonhal</span></footer>
 </main>
 <div id="toast" role="status" hidden></div>
 </body>
