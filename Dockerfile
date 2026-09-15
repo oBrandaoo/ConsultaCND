@@ -15,7 +15,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY app.py consultations.py browser_worker.py ./
 COPY federal.py fgts.py santa_rita.py trabalhista.py falencia.py ./
-COPY estadual_mg.py estadual_sp.py pouso_alegre.py ./
+COPY estadual_mg.py estadual_sp.py pouso_alegre.py congonhal.py ./
 COPY static ./static
 COPY docs ./docs
 

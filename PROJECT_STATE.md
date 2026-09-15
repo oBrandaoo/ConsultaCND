@@ -1,5 +1,49 @@
 # Estado do projeto
 
+## Atualizacao - 2026-09-14 - Municipal Congonhal
+
+### Concluido
+
+- Ajuste desta rodada: corrigido o portal de Congonhal para `https://congonhal-mg.prefeituramoderna.com.br/meuiptu/index.php#`, conforme validacao manual do usuario.
+- Ajuste desta rodada: corrigido o fluxo de navegacao de Congonhal para abrir a opcao interna `Emissao de Certidao` e aguardar a tela `Emitir Certidao de Debito`, sem autenticar primeiro no bloco de IPTU e Outros Debitos.
+- Ajuste desta rodada: apos nova imagem do portal, o clique de Congonhal passou a mirar explicitamente o item lateral `Servicos > Emissao de Certidao` por texto exato normalizado, evitando botoes/links genericos e o botao `Acessar Site` da autenticacao.
+- Ajuste desta rodada: o conector preenche os campos reais da tela de emissao: `CPF/CNPJ da Certidao`, `Nome do Requerente`, `Numero do CPF` e `Finalidade`; `Observacao` permanece disponivel e sem preenchimento obrigatorio.
+- Ajuste desta rodada: apos HTML real enviado pelo usuario, o conector passou a usar diretamente os nomes reais do formulario Prefeitura Moderna: `nrcpfcnpj`, `nmrequerente`, `nrdocumento`, `finalidade`, `observacao`, com POST em `imprime_certidao.php`.
+- Ajuste desta rodada: apos erro real `O NUMERO DO CPF/CNPJ DO REQUERENTE E INVALIDO` ao abrir `imprime_certidao.php?` diretamente, a tentativa direta foi revertida.
+- Ajuste desta rodada: o fluxo automatico volta a iniciar em `index.php#`, clica no menu lateral `Emissao de Certidao`, preenche o formulario na mesma pagina e deixa o submit abrir a janela/popup `imprime_certidao.php?`.
+- Ajuste desta rodada: o clique no menu lateral passou a usar `locator.get_by_text(...).click()` do Playwright, em vez de `element.click()` via JavaScript, para contar como gesto real do navegador e permitir abertura da popup.
+- Ajuste desta rodada: apos nova confirmacao do usuario, o popup de `imprime_certidao.php?` passou a ser tratado como etapa posterior ao submit, com clique no botao `Imprimir` e captura do PDF por resposta `application/pdf` ou download.
+- Ajuste desta rodada: removido o fallback por `page.pdf()` porque o Docker roda Chromium headed em Xvfb; se o botao `Imprimir` so abrir dialogo nativo sem PDF/download, o fluxo retorna erro rastreavel em vez de produzir arquivo artificial.
+- Ajuste desta rodada: testes simulados de Congonhal agora cobrem o fluxo real `index.php# -> menu lateral -> formulario na mesma pagina -> popup imprime_certidao.php? -> botao Imprimir -> PDF`, sem acionar autenticacao do IPTU.
+- Ajuste desta rodada: limite de `nome_usuario` alinhado ao `maxlength=50` real de `nmrequerente`, evitando envio truncado pelo portal.
+- Ajuste desta rodada: Congonhal agora exige e valida `nome_usuario` e `cpf_usuario`; o frontend mostra os campos somente quando `municipal_congonhal` esta selecionado e o backend guarda esses dados apenas em `_inputs` durante a consulta.
+- Ajuste desta rodada: ampliada a cobertura em `tests/test_app.py`, `tests/test_congonhal.py` e `tests/browser_smoke.py` para CPF invalido, campos extras, contrato de repasse para `consult_congonhal`, erro sem nome/CPF, fluxo Playwright simulado e exibicao/ocultacao dos campos de Congonhal.
+- Ajuste desta rodada: Reader mapeou os pontos de alteracao, Writer revisou lacunas de cobertura e Reviewer revisou a integracao final; a revisao final do fluxo popup/download terminou sem bloqueantes novos.
+
+- Implementada a tentativa automatica da CND municipal de Congonhal como servico `municipal_congonhal`.
+- Criado `congonhal.py` com acesso ao portal Prefeitura Moderna/IPTU e Outros Debitos, preenchimento de CNPJ, busca da emissao de certidao, captura de resposta PDF e validacao com `pypdf`.
+- A validacao do PDF de Congonhal confere CNPJ, municipio, tipo/declaração negativa, numero ou controle, emissao e validade antes de liberar o documento.
+- Integrados backend/API/download em `consultations.py` e `app.py`, incluindo escopo, prefixo `cnd-congonhal` e URL do portal oficial.
+- Atualizados frontend, smoke test, Dockerfile, README e `docs/escopo.md` para exibir Congonhal junto das demais certidoes.
+- Writer criou `tests/test_congonhal.py` com PDF sintetico, rejeicoes de documento invalido/divergente e fluxo Playwright simulado.
+- Reviewer revisou a integracao e nao encontrou bloqueantes; apontou riscos operacionais do portal real, principalmente formatos alternativos de PDF/download que precisam de validacao manual.
+
+### Validacao
+
+- `node --check static/app.js` executou com sucesso.
+- `git diff --check` nos arquivos modificados executou sem erros; houve apenas avisos esperados de LF/CRLF.
+- `git diff --no-index --check` em `congonhal.py` e `tests/test_congonhal.py` executou sem erros; houve apenas avisos esperados de LF/CRLF.
+- `python -m unittest discover -s tests -v`, `py -3 -m unittest discover -s tests -v` e `python tests/browser_smoke.py` nao puderam rodar porque `python` e `py` nao estao no PATH desta sessao.
+- `docker compose config` e `docker compose build` nao puderam rodar porque `docker` nao esta no PATH desta sessao.
+
+### Pendente
+
+- Para corrigir eventual divergencia restante do portal real de Congonhal, pedir ao usuario Network sanitizado do clique em `Imprimir` no popup apenas se o portal nao retornar PDF/download; remover CPF/CNPJ, nome, cookies e tokens.
+- Rodar a suite automatizada em ambiente com Python/Playwright disponivel, incluindo `python -m unittest tests.test_congonhal tests.test_app -v`.
+- Rodar `python tests/browser_smoke.py` em ambiente com navegador Playwright disponivel.
+- Rodar `docker compose config` e `docker compose build` em ambiente com Docker.
+- Validar manualmente a emissao real de Congonhal no modo servidor/Chromium; se o portal emitir PDF por popup, download ou host alternativo, ajustar a captura.
+
 ## Atualizacao - 2026-09-14 - Docker servidor
 
 ### Concluido

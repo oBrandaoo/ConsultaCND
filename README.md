@@ -1,6 +1,6 @@
-# Certifica — CND federal, FGTS, CNDT, estaduais MG/SP e Santa Rita
+# Certifica — CND federal, FGTS, CNDT, estaduais MG/SP e municipais
 
-Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa, emitir a CNDT trabalhista no TST, solicitar a certidão de falência e concordata no TJMG, emitir CNDs estaduais de MG/SP e emitir a CND municipal de Santa Rita do Sapucaí. O usuário informa o CNPJ, inicia a consulta e recebe a prévia do PDF na própria página, com opção de download, quando o portal libera a emissão.
+Aplicação web para emitir ou baixar a segunda via da certidão federal da Receita Federal/PGFN, consultar o CRF do FGTS na Caixa, emitir a CNDT trabalhista no TST, solicitar a certidão de falência e concordata no TJMG, emitir CNDs estaduais de MG/SP e emitir CNDs municipais de Santa Rita do Sapucaí e Congonhal. O usuário informa o CNPJ, inicia a consulta e recebe a prévia do PDF na própria página, com opção de download, quando o portal libera a emissão.
 
 ## Prévia gratuita imediata no Windows
 
@@ -90,6 +90,7 @@ Se aparecer `No module named 'playwright.async_api'`, instale as dependências u
 - **Estadual MG:** tenta emitir a CDT pública da SEF/MG no Chromium do servidor e entrega o PDF somente após conferir CNPJ, órgão emissor, declaração, número e validade. Quando a SEF/MG exige SIARE, login ou certificado, o status informa a pendência sem abrir Edge.
 - **Estadual SP:** tenta emitir a eCND de débitos tributários não inscritos da Sefaz/SP e entrega o PDF somente após conferir CNPJ, órgão emissor, declaração, número e validade. No Windows em `local-edge`, se a Sefaz/SP exigir CAPTCHA, a consulta aguarda a digitação humana no Edge e continua após o operador clicar em emitir/consultar. Pendências que exigem e-CNPJ, e-CPF, SIPET ou atendimento pela PGE ficam sinalizadas como login/manual.
 - **Santa Rita do Sapucaí:** usa o fluxo público da prefeitura e confere o PDF municipal antes de entregá-lo.
+- **Congonhal:** usa o fluxo público Prefeitura Moderna/IPTU e Outros Débitos, tenta emitir a CND municipal por CNPJ e exige nome e CPF do usuário solicitante. Esses dados são usados somente na consulta em andamento. O PDF só é entregue após conferir CNPJ, município, declaração negativa, número/controle e validade.
 
 O portal federal usa hCaptcha invisível. Normalmente ele é resolvido em segundo plano, mas pode recusar a sessão ou apresentar um desafio. A aplicação não tenta contornar essa proteção e não transforma falha de acesso em conclusão fiscal. Uma consulta recusada termina com a causa identificada e pode ser refeita posteriormente.
 
@@ -116,4 +117,4 @@ python -m unittest discover -s tests -v
 python tests/browser_smoke.py
 ```
 
-Os testes automatizados usam respostas controladas. Os conectores também foram verificados nos portais reais: Santa Rita emitiu e validou o PDF municipal; a consulta federal localizou uma certidão vigente, solicitou a segunda via e validou o PDF retornado; e o FGTS confirmou um CRF vigente da própria Caixa e gerou o PDF validado. A CNDT trabalhista, a certidão de falência/concordata e as estaduais MG/SP possuem cobertura automatizada simulada e dependem de validação visual em uso real.
+Os testes automatizados usam respostas controladas. Os conectores também foram verificados nos portais reais: Santa Rita emitiu e validou o PDF municipal; a consulta federal localizou uma certidão vigente, solicitou a segunda via e validou o PDF retornado; e o FGTS confirmou um CRF vigente da própria Caixa e gerou o PDF validado. A CNDT trabalhista, a certidão de falência/concordata, as estaduais MG/SP e Congonhal possuem cobertura automatizada simulada e dependem de validação visual em uso real.
